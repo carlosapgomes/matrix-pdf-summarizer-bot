@@ -1,0 +1,26 @@
+[project]
+name = "matrix-pdf-summarizer-bot"
+version = "0.1.0"
+description = "A Matrix bot that extracts and summarizes PDF uploads using an LLM."
+authors = [{ name = "Your Name", email = "you@example.com" }]
+requires-python = ">=3.9"
+
+dependencies = [
+    "matrix-nio[e2e]",
+    "aiohttp",
+    "python-dotenv",
+    "pypdf",
+    "openai",
+]
+
+[tool.uv]
+python = "3.12"
+
+[tool.black]
+line-length = 88
+target-version = ["py311"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+
