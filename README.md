@@ -84,6 +84,118 @@ All responses are threaded as replies to the original PDF upload message.
 
 Press `Ctrl+C` to gracefully shutdown the bot. The sync position will be saved automatically, so the bot won't reprocess old messages when restarted.
 
+## Production Deployment (VPS/Server)
+
+For deploying the bot on the same server as your Matrix homeserver with resource optimization:
+
+### 1. Create dedicated user and directory
+```bash
+# Create bot user with limited privileges
+sudo useradd -m -s /bin/bash matrixbot
+sudo su - matrixbot
+
+# Create bot directory
+mkdir ~/pdf-bot
+cd ~/pdf-bot
+```
+
+### 2. Install the bot
+```bash
+# Clone repository
+git clone https://github.com/carlosapgomes/matrix-pdf-summarizer-bot.git .
+
+# Install uv (recommended for faster dependency resolution)
+curl -LsSf https://astral.sh/uv/install.sh | sh
+source ~/.bashrc
+
+# Install dependencies
+uv sync
+```
+
+### 3. Configure environment
+```bash
+# Copy and edit configuration
+cp .env.example .env
+nano .env
+```
+
+Configure with your local Matrix server:
+```bash
+MATRIX_HOMESERVER=http://localhost:8008  # or your Matrix server port
+MATRIX_USER=@pdfbot:yourdomain.com
+MATRIX_PASSWORD=your_bot_password
+MATRIX_ROOM_ID=!yourroom:yourdomain.com
+OPENAI_API_KEY=your_openai_key
+```
+
+### 4. Create systemd service with resource limits
+```bash
+sudo nano /etc/systemd/system/matrix-pdf-bot.service
+```
+
+```ini
+[Unit]
+Description=Matrix PDF Summarizer Bot
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=matrixbot
+Group=matrixbot
+WorkingDirectory=/home/matrixbot/pdf-bot
+ExecStart=/home/matrixbot/pdf-bot/.venv/bin/python bot.py
+Restart=always
+RestartSec=10
+
+# Resource limits to protect Matrix server
+CPUQuota=50%
+MemoryMax=512M
+Nice=10
+IOSchedulingClass=2
+IOSchedulingPriority=7
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/home/matrixbot/pdf-bot
+
+[Install]
+WantedBy=multi-user.target
+```
+
+### 5. Deploy and start
+```bash
+# Reload systemd and enable service
+sudo systemctl daemon-reload
+sudo systemctl enable matrix-pdf-bot.service
+sudo systemctl start matrix-pdf-bot.service
+
+# Check status
+sudo systemctl status matrix-pdf-bot.service
+```
+
+### 6. Monitor resource usage
+```bash
+# Monitor bot resources
+sudo systemctl status matrix-pdf-bot.service
+sudo journalctl -u matrix-pdf-bot.service -f
+
+# Check system resources
+htop
+# Look for python processes under matrixbot user
+```
+
+### Resource Optimizations Applied
+- **CPU limit**: 50% maximum CPU usage
+- **Memory limit**: 512MB maximum (adjust based on your VPS specs)
+- **Process priority**: Lower priority (nice=10) so Matrix gets preference
+- **I/O priority**: Lower I/O scheduling priority
+- **Security isolation**: Restricted filesystem access and privileges
+- **Dedicated user**: Runs under separate user account
+
 ## Customization
 
 The bot's summarization instructions can be customized in `bot.py` at the `process_pdf()` function. Currently configured for medical report summaries in Brazilian Portuguese.
