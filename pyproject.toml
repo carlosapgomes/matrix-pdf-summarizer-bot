@@ -14,7 +14,6 @@ dependencies = [
 ]
 
 [tool.uv]
-python = "3.12"
 
 [tool.black]
 line-length = 88

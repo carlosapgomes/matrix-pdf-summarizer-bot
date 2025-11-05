@@ -169,7 +169,7 @@ async def process_pdf(file_bytes: bytes, filename: str) -> str:
     cleaned_text = remove_watermark(text)
 
     instructions = (
-        "It is a medical reference report in brazilian portuguese for a patient with vascular disease."
+        "It is a patient reference report in brazilian portuguese for a patient with vascular disease."
         "You are a medical vascular specialist whose job is to summarize the patient's clinical status and the main reasons for referencing him/her AND set a triage opinion for the patient to be accepted or not in your current hospital."
         "Your current hospital have the following acceptance criteria:"
         "- patients that have infected ulcers that need debridement and or infection treatment"
@@ -181,9 +181,11 @@ async def process_pdf(file_bytes: bytes, filename: str) -> str:
         "- patients that do not need limb revascularization"
         "- patients that do not need carotid or aneurysm surgery"
         "- patients that do not need endovascular procedures"
+        "- patients that do not have diagnosis or hypotesis of obstructive aortoiliac disease (monophasic flow in the common femural artery is a sign of proximal [aortoiliac] oclusive disease)."
         "The output should be a in markdown format written in Brazilian Portuguese, but without triple backticks fencing, just the markdown formatted text."
         "Put your acceptance recommendation in the top of the text, followed by your acceptance/denying reason, followed by the patient's clinical summary. Use the following text for the acceptance: 'Recomendação:  ✅ *Aceitar*' and the following text for the denying recommendation: 'Recomendação: ❌ *Recusar*'"
         "Do not use utf emoticons in the clinical summary."
+        "Do not add any clinical recommendations at the end of the report."
         "Do your best to not include any sensitive information in the output that could identify the patient."
     )
     # instructions = (
@@ -235,7 +237,7 @@ async def message_callback(room: MatrixRoom, event: RoomMessageMedia):
         message_type="m.room.message",
         content={
             "msgtype": "m.text",
-            "body": f"🧠 Processing `{event.body}`...",
+            "body": f"🧠 Processando `{event.body}`...",
             "m.relates_to": {"m.in_reply_to": {"event_id": event.event_id}},
         },
     )
@@ -247,7 +249,7 @@ async def message_callback(room: MatrixRoom, event: RoomMessageMedia):
             message_type="m.room.message",
             content={
                 "msgtype": "m.text",
-                "body": f"📘 **Summary of `{event.body}`:**\n\n{summary}",
+                "body": f"{summary}",
                 "m.relates_to": {"m.in_reply_to": {"event_id": event.event_id}},
             },
         )
@@ -259,7 +261,7 @@ async def message_callback(room: MatrixRoom, event: RoomMessageMedia):
             message_type="m.room.message",
             content={
                 "msgtype": "m.text",
-                "body": f"❌ Failed to summarize `{event.body}`: {e}",
+                "body": f"❌ Falha ao analizar `{event.body}`: {e}",
                 "m.relates_to": {"m.in_reply_to": {"event_id": event.event_id}},
             },
         )
