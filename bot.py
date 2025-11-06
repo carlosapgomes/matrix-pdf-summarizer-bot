@@ -25,6 +25,7 @@ MATRIX_PASSWORD = os.getenv("MATRIX_PASSWORD")
 MATRIX_ROOM_ID = os.getenv("MATRIX_ROOM_ID")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 SESSION_FILE = os.getenv("SESSION_FILE", "session.json")
+PROMPT_FILE = os.getenv("PROMPT_FILE", "prompts/medical_triage.txt")
 
 # -------------------------------------------------------------------
 # Logging
@@ -157,6 +158,21 @@ async def summarize_text(text: str, instructions: str) -> str:
     return response.choices[0].message.content.strip()
 
 
+def load_prompt(prompt_file_path: str) -> str:
+    """Load prompt instructions from a file."""
+    try:
+        with open(prompt_file_path, "r", encoding="utf-8") as f:
+            prompt = f.read().strip()
+        logger.info(f"📝 Loaded prompt from {prompt_file_path}")
+        return prompt
+    except FileNotFoundError:
+        logger.error(f"❌ Prompt file not found: {prompt_file_path}")
+        raise
+    except Exception as e:
+        logger.error(f"❌ Error loading prompt file: {e}")
+        raise
+
+
 async def process_pdf(file_bytes: bytes, filename: str) -> str:
     """Full pipeline: extract → clean → summarize → return summary text."""
     text = extract_pdf_text(file_bytes)
@@ -168,34 +184,8 @@ async def process_pdf(file_bytes: bytes, filename: str) -> str:
     # Remove watermark sequences
     cleaned_text = remove_watermark(text)
 
-    instructions = (
-        "It is a patient reference report in brazilian portuguese for a patient with vascular disease."
-        "You are a medical vascular specialist whose job is to summarize the patient's clinical status and the main reasons for referencing him/her AND set a triage opinion for the patient to be accepted or not in your current hospital."
-        "Your current hospital have the following acceptance criteria:"
-        "- patients that have infected ulcers that need debridement and or infection treatment"
-        "- patients that need minor or major amputations"
-        "- patients that have, at least, a palpable femural pulse on the affected limb"
-        "- patients that have a creatinine level below or equal to 1.4 mg/dL."
-        "- patients that do not need dialysis"
-        "- patients that do not need major vascular surgery"
-        "- patients that do not need limb revascularization"
-        "- patients that do not need carotid or aneurysm surgery"
-        "- patients that do not need endovascular procedures"
-        "- patients that do not have diagnosis or hypotesis of obstructive aortoiliac disease (monophasic flow in the common femural artery is a sign of proximal [aortoiliac] oclusive disease)."
-        "The output should be a in markdown format written in Brazilian Portuguese, but without triple backticks fencing, just the markdown formatted text."
-        "Put your acceptance recommendation in the top of the text, followed by your acceptance/denying reason, followed by the patient's clinical summary. Use the following text for the acceptance: 'Recomendação:  ✅ *Aceitar*' and the following text for the denying recommendation: 'Recomendação: ❌ *Recusar*'"
-        "Do not use utf emoticons in the clinical summary."
-        "Do not add any clinical recommendations at the end of the report."
-        "Do your best to not include any sensitive information in the output that could identify the patient."
-    )
-    # instructions = (
-    #     "You are a medical doctor especialized in vascular surgery."
-    #     "Your job here is to analyse and summarize patients report transfer requests."
-    #     "You should summarize the report and organize its content cronologically, identifying the most important reason for the request."
-    #     "Summarize the content of the document clearly and concisely. "
-    #     "Ignore watermarks, headers, or footers."
-    #     "All your output should be written in Brazilian Portuguese"
-    # )
+    # Load instructions from external prompt file
+    instructions = load_prompt(PROMPT_FILE)
 
     logger.info(f"🤖 Sending to LLM for summarization...")
     summary = await summarize_text(cleaned_text, instructions)
