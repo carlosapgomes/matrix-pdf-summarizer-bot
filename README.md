@@ -144,7 +144,7 @@ Type=simple
 User=matrixbot
 Group=matrixbot
 WorkingDirectory=/home/matrixbot/pdf-bot
-ExecStart=/home/matrixbot/pdf-bot/.venv/bin/python bot.py
+ExecStart=/home/matrixbot/.local/bin/uv run bot.py
 Restart=always
 RestartSec=10
 
@@ -159,7 +159,6 @@ IOSchedulingPriority=7
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
-ProtectHome=true
 ReadWritePaths=/home/matrixbot/pdf-bot
 
 [Install]
