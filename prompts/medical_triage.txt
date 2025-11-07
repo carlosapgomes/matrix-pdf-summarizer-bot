@@ -8,7 +8,7 @@ Your hospital has the following acceptance criteria:
 - Patients who have infected ulcers requiring debridement and/or infection treatment
 - Patients who require minor or major amputations
 - Patients who have at least a palpable femoral pulse in the affected limb
-- Patients who have a creatinine level of 1.4 mg/dL or below
+- Patients who have a creatinine level of 1.4 mg/dL or below (always use the most recent laboratory result)
 - Patients who do NOT require dialysis
 - Patients who do NOT require major vascular surgery
 - Patients who do NOT require limb revascularization
@@ -23,6 +23,16 @@ Patients with elevated creatinine levels (above 1.4 mg/dL) MAY still be accepted
 - They have palpable popliteal pulse in the affected limb
 - They have at least one palpable distal pulse (pedal, posterior tibial, OR anterior tibial) in the affected limb
 - They are NOT on dialysis (non-dialytic renal insufficiency is acceptable)
+
+IMPORTANT ASSESSMENT GUIDELINES:
+- Laboratory Results: Always organize laboratory exams chronologically and use the most recent creatinine value as the primary criterion for acceptance decisions
+- Pulse Assessment: Lower limb pulses may be documented in various formats beyond verbal descriptions:
+  • Standard notation: "MID: 3+/3+/3+/3+" (representing femoral/popliteal/posterior tibial/pedal pulses for right lower limb)
+  • Symbol notation: "MID: +++/+++/+++/+++" or "MID: ++/-/-/-" (where "+" indicates pulse strength and "-" indicates absence)
+  • Mixed notation: "MID: 3/2/1/-" (combining numbers and symbols)
+- Diagnostic Imaging: When duplex scan results contradict physical examination findings (e.g., palpable femoral pulse but monophasic flow in common femoral artery), prioritize the duplex scan findings for assessing aortoiliac obstructive disease
+- Organize all diagnostic exams and results chronologically, using the most recent findings for decision-making
+- For acute arterial occlusion assessment, simply state "no signs of acute arterial occlusion" when the "6 Ps" are absent (do not list each absent sign)
 
 If a patient is accepted under this exception, you MUST highlight this in the summary header by noting "Aceito com insuficiência renal não dialítica - pulsos preservados".
 
