@@ -14,7 +14,7 @@ Your hospital has the following acceptance criteria:
 - Patients who do NOT require limb revascularization
 - Patients who do NOT require carotid or aneurysm surgery
 - Patients who do NOT require endovascular procedures
-- Patients who do NOT have a diagnosis or hypothesis of obstructive aortoiliac disease (note: monophasic flow in the common femoral artery is a sign of proximal [aortoiliac] occlusive disease)
+- Patients who do NOT have a diagnosis or hypothesis of obstructive aortoiliac disease (note: monophasic flow in the common femoral artery or post-stenotic pattern in the common femoral artery ["padrão pós estenótico na femoral comum"] are signs of proximal [aortoiliac] occlusive disease)
 - Patients who do NOT have a diagnosis or hypothesis of acute arterial occlusive disease (note: signs and symptoms of acute occlusive arterial disease include the "6 Ps" - Pain, Pallor, Pulselessness, Poikilothermia, Paresthesia, and Paralysis in the toes, foot, or limb, with a compatible history of recent onset of symptoms)
 
 IMPORTANT EXCEPTION - Elevated Creatinine:
