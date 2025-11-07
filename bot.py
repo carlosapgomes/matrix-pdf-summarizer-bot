@@ -29,7 +29,7 @@ PROMPT_FILE = os.getenv("PROMPT_FILE", "prompts/medical_triage.txt")
 
 # LLM Configuration
 LLM_MODEL = os.getenv("LLM_MODEL", "gpt-5-mini")
-LLM_BASE_URL = os.getenv("LLM_BASE_URL")  # Optional: for OpenAI-compatible APIs
+LLM_BASE_URL = os.getenv("LLM_BASE_URL", None)  # Optional: for OpenAI-compatible APIs
 LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE")) if os.getenv("LLM_TEMPERATURE") else None
 LLM_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS")) if os.getenv("LLM_MAX_TOKENS") else None
 
