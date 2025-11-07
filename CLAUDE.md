@@ -40,7 +40,7 @@ This is a single-file Matrix bot (`bot.py`) that monitors Matrix rooms for PDF u
 1. **PDF Detection**: Monitors Matrix room for `.pdf` file uploads via `RoomMessageMedia` events
 2. **Download & Extract**: Downloads PDF files and extracts text using `pypdf`
 3. **Preprocessing**: Removes watermarks (specifically 5-digit sequences that repeat 3+ times)
-4. **AI Summarization**: Uses OpenAI GPT-4o-mini to generate summaries with specialized medical instructions
+4. **AI Summarization**: Uses configurable LLM (defaults to GPT-5-mini) to generate summaries with specialized medical instructions loaded from external prompt file
 5. **Response**: Posts threaded replies with summaries back to the Matrix room
 
 ### State Management
@@ -49,12 +49,18 @@ This is a single-file Matrix bot (`bot.py`) that monitors Matrix rooms for PDF u
 - **Graceful Shutdown**: Saves session state on SIGINT/shutdown
 
 ### Configuration
-- Uses `.env` file for all configuration (Matrix credentials, OpenAI API key, room ID)
+- Uses `.env` file for all configuration (Matrix credentials, OpenAI API key, room ID, LLM settings)
 - Copy `.env.example` to `.env` and configure before running
-- Session file location configurable via `SESSION_FILE` environment variable
+- **Session file**: Configurable via `SESSION_FILE` environment variable (defaults to `session.json`)
+- **Prompt file**: Configurable via `PROMPT_FILE` environment variable (defaults to `prompts/medical_triage.txt`)
+- **LLM Configuration**:
+  - `LLM_MODEL`: AI model to use (defaults to `gpt-5-mini`)
+  - `LLM_BASE_URL`: Optional custom API endpoint for OpenAI-compatible APIs (Ollama, LM Studio, Azure OpenAI, etc.)
+  - `LLM_TEMPERATURE`: Optional response creativity control (0.0-2.0)
+  - `LLM_MAX_TOKENS`: Optional maximum response length
 
 ### Specialized Use Case
-The bot is currently configured for Brazilian Portuguese medical report analysis with specific triage criteria for vascular surgery patients. The summarization instructions are hardcoded in the `process_pdf()` function and include detailed acceptance/rejection criteria for a hospital's vascular department.
+The bot is currently configured for Brazilian Portuguese medical report analysis with specific triage criteria for vascular surgery patients. The summarization instructions are stored in `prompts/medical_triage.txt` and include detailed acceptance/rejection criteria for a hospital's vascular department. The prompt file can be easily customized without modifying the code.
 
 ### Key Dependencies
 - `matrix-nio[e2e]`: Matrix client library with E2E encryption support

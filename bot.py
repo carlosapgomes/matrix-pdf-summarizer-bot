@@ -27,6 +27,12 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 SESSION_FILE = os.getenv("SESSION_FILE", "session.json")
 PROMPT_FILE = os.getenv("PROMPT_FILE", "prompts/medical_triage.txt")
 
+# LLM Configuration
+LLM_MODEL = os.getenv("LLM_MODEL", "gpt-5-mini")
+LLM_BASE_URL = os.getenv("LLM_BASE_URL")  # Optional: for OpenAI-compatible APIs
+LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE")) if os.getenv("LLM_TEMPERATURE") else None
+LLM_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS")) if os.getenv("LLM_MAX_TOKENS") else None
+
 # -------------------------------------------------------------------
 # Logging
 # -------------------------------------------------------------------
@@ -41,7 +47,12 @@ logger = logging.getLogger("matrix-pdf-bot")
 # Globals
 # -------------------------------------------------------------------
 matrix_client: AsyncClient | None = None
-llm_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
+
+# Initialize OpenAI client with optional base_url for compatible APIs
+llm_client_kwargs = {"api_key": OPENAI_API_KEY}
+if LLM_BASE_URL:
+    llm_client_kwargs["base_url"] = LLM_BASE_URL
+llm_client = AsyncOpenAI(**llm_client_kwargs)
 
 
 # -------------------------------------------------------------------
@@ -148,13 +159,22 @@ def extract_pdf_text(file_bytes: bytes) -> str:
 
 async def summarize_text(text: str, instructions: str) -> str:
     """Use LLM to summarize a given text with instructions."""
-    response = await llm_client.chat.completions.create(
-        model="gpt-5-mini",
-        messages=[
+    # Build API call parameters
+    api_params = {
+        "model": LLM_MODEL,
+        "messages": [
             {"role": "system", "content": instructions},
             {"role": "user", "content": text},  # GPT-5-mini can handle large inputs
         ],
-    )
+    }
+
+    # Add optional parameters if configured
+    if LLM_TEMPERATURE is not None:
+        api_params["temperature"] = LLM_TEMPERATURE
+    if LLM_MAX_TOKENS is not None:
+        api_params["max_tokens"] = LLM_MAX_TOKENS
+
+    response = await llm_client.chat.completions.create(**api_params)
     return response.choices[0].message.content.strip()
 
 

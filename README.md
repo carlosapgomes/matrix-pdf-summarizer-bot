@@ -7,7 +7,8 @@ A Matrix bot that automatically detects PDF uploads in a room, extracts their te
 - 🤖 Automatically detects PDF file uploads in Matrix rooms
 - 📄 Extracts text from PDF documents
 - 🧹 Removes repeating watermark sequences
-- 🧠 Generates concise summaries using OpenAI's GPT-4o-mini
+- 🧠 Generates concise summaries using configurable LLM (defaults to GPT-5-mini)
+- 🔧 Supports OpenAI-compatible APIs (Ollama, LM Studio, Azure OpenAI, etc.)
 - 💬 Replies to the original PDF message with the summary (threaded)
 - 💾 Persists sync tokens to avoid reprocessing messages after restarts
 - 🛡️ Clean shutdown handling with state preservation
@@ -48,6 +49,11 @@ cp .env.example .env
    - `MATRIX_PASSWORD`: Your bot's password
    - `MATRIX_ROOM_ID`: The room ID to monitor (without server suffix)
    - `OPENAI_API_KEY`: Your OpenAI API key
+   - `LLM_MODEL`: AI model to use (defaults to `gpt-5-mini`)
+   - `LLM_BASE_URL`: (Optional) Custom API endpoint for OpenAI-compatible APIs
+   - `LLM_TEMPERATURE`: (Optional) Response creativity (0.0-2.0)
+   - `LLM_MAX_TOKENS`: (Optional) Maximum response length
+   - `PROMPT_FILE`: Path to prompt file (defaults to `prompts/medical_triage.txt`)
 
 ## Running the Bot
 
@@ -126,6 +132,8 @@ MATRIX_USER=@pdfbot:yourdomain.com
 MATRIX_PASSWORD=your_bot_password
 MATRIX_ROOM_ID=!yourroom:yourdomain.com
 OPENAI_API_KEY=your_openai_key
+LLM_MODEL=gpt-5-mini
+# LLM_BASE_URL=http://localhost:11434/v1  # Optional: for local Ollama
 ```
 
 ### 4. Create systemd service with resource limits
@@ -197,7 +205,36 @@ htop
 
 ## Customization
 
-The bot's summarization instructions can be customized in `bot.py` at the `process_pdf()` function. Currently configured for medical report summaries in Brazilian Portuguese.
+### AI Prompt Configuration
+
+The bot's summarization instructions are stored in an external prompt file for easy customization:
+
+- **Default prompt**: `prompts/medical_triage.txt`
+- **Custom prompt**: Set `PROMPT_FILE` in `.env` to point to your own prompt file
+
+The default prompt is configured for medical report triage in Brazilian Portuguese with specific acceptance criteria for vascular surgery patients.
+
+### Using Different LLM Providers
+
+The bot supports any OpenAI-compatible API. Examples:
+
+**Local LLM with Ollama:**
+```bash
+LLM_MODEL=llama3.2
+LLM_BASE_URL=http://localhost:11434/v1
+```
+
+**Azure OpenAI:**
+```bash
+LLM_MODEL=gpt-4
+LLM_BASE_URL=https://your-resource.openai.azure.com/openai/deployments/your-deployment
+```
+
+**LM Studio:**
+```bash
+LLM_MODEL=local-model
+LLM_BASE_URL=http://localhost:1234/v1
+```
 
 ## Acknowledgments
 
