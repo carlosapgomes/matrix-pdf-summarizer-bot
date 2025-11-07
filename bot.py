@@ -152,7 +152,7 @@ async def summarize_text(text: str, instructions: str) -> str:
         model="gpt-5-mini",
         messages=[
             {"role": "system", "content": instructions},
-            {"role": "user", "content": text[:15000]},  # truncate if huge
+            {"role": "user", "content": text},  # GPT-5-mini can handle large inputs
         ],
     )
     return response.choices[0].message.content.strip()
