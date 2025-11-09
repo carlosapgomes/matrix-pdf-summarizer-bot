@@ -23,3 +23,9 @@ target-version = ["py311"]
 line-length = 88
 target-version = "py311"
 
+[dependency-groups]
+dev = [
+    "black>=25.9.0",
+    "ruff>=0.14.4",
+]
+

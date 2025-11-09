@@ -9,10 +9,13 @@ from nio import (
     AsyncClient,
     MatrixRoom,
     RoomMessageMedia,
+    RoomMessageText,
+    InviteMemberEvent,
     LoginResponse,
     SyncResponse,
 )
 from dotenv import load_dotenv
+from user_interactions import dm_callback, mention_callback, invite_callback
 
 # -------------------------------------------------------------------
 # Load environment variables
@@ -30,8 +33,12 @@ PROMPT_FILE = os.getenv("PROMPT_FILE", "prompts/medical_triage.txt")
 # LLM Configuration
 LLM_MODEL = os.getenv("LLM_MODEL", "gpt-5-mini")
 LLM_BASE_URL = os.getenv("LLM_BASE_URL", None)  # Optional: for OpenAI-compatible APIs
-LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE")) if os.getenv("LLM_TEMPERATURE") else None
-LLM_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS")) if os.getenv("LLM_MAX_TOKENS") else None
+LLM_TEMPERATURE = (
+    float(os.getenv("LLM_TEMPERATURE")) if os.getenv("LLM_TEMPERATURE") else None
+)
+LLM_MAX_TOKENS = (
+    int(os.getenv("LLM_MAX_TOKENS")) if os.getenv("LLM_MAX_TOKENS") else None
+)
 
 # -------------------------------------------------------------------
 # Logging
@@ -69,7 +76,7 @@ async def store_session(client: AsyncClient, next_batch: str = None, log: bool =
     with open(SESSION_FILE, "w") as f:
         json.dump(data, f)
     if log:
-        logger.info(f"💾 Session saved")
+        logger.info("💾 Session saved")
 
 
 async def load_client() -> tuple[AsyncClient, str | None]:
@@ -207,7 +214,7 @@ async def process_pdf(file_bytes: bytes, filename: str) -> str:
     # Load instructions from external prompt file
     instructions = load_prompt(PROMPT_FILE)
 
-    logger.info(f"🤖 Sending to LLM for summarization...")
+    logger.info("🤖 Sending to LLM for summarization...")
     summary = await summarize_text(cleaned_text, instructions)
     logger.info(f"✅ Summary generated ({len(summary)} characters)")
 
@@ -236,7 +243,7 @@ async def message_callback(room: MatrixRoom, event: RoomMessageMedia):
     download_response = await matrix_client.download(event.url)
 
     if not download_response or not hasattr(download_response, "body"):
-        logger.warning(f"⚠️ Failed to download PDF")
+        logger.warning("⚠️ Failed to download PDF")
         return
 
     file_data = download_response.body
@@ -311,7 +318,23 @@ async def main():
     matrix_client.add_event_callback(message_callback, RoomMessageMedia)
     matrix_client.add_response_callback(sync_callback, SyncResponse)
 
-    logger.info(f"👀 Listening for PDF uploads...")
+    # Register user interaction callbacks
+    matrix_client.add_event_callback(
+        lambda room, event: dm_callback(room, event, matrix_client, MATRIX_ROOM_ID),
+        RoomMessageText,
+    )
+    matrix_client.add_event_callback(
+        lambda room, event: mention_callback(
+            room, event, matrix_client, MATRIX_ROOM_ID
+        ),
+        RoomMessageText,
+    )
+    matrix_client.add_event_callback(
+        lambda room, event: invite_callback(room, event, matrix_client, MATRIX_ROOM_ID),
+        InviteMemberEvent,
+    )
+
+    logger.info("👀 Listening for PDF uploads...")
 
     try:
         await matrix_client.sync_forever(timeout=30000, since=next_batch)
