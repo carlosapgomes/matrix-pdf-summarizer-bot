@@ -203,6 +203,47 @@ htop
 - **Security isolation**: Restricted filesystem access and privileges
 - **Dedicated user**: Runs under separate user account
 
+## Auto-Deployment Options
+
+You can set up automatic deployment to update the bot when you push changes to the repository:
+
+### Option 1: Cron Job with Git Polling (Recommended)
+
+Simple cron job that checks for updates every few minutes:
+
+```bash
+# Edit crontab as the matrixbot user
+sudo su - matrixbot
+crontab -e
+
+# Add this line to check for updates every 5 minutes
+*/5 * * * * cd /home/matrixbot/pdf-bot && git fetch && [ $(git rev-list HEAD...origin/master --count) != 0 ] && git pull && sudo systemctl restart matrix-pdf-bot.service
+```
+
+**How it works:**
+- `git fetch` - Downloads latest commit info (lightweight operation)
+- `git rev-list HEAD...origin/master --count` - Counts commits you don't have locally
+- If count > 0, runs `git pull` and restarts the service
+- Only triggers actual deployment when there are new commits
+
+**Setup requirements:**
+```bash
+# Give matrixbot user permission to restart the service
+sudo visudo
+# Add this line:
+matrixbot ALL=(ALL) NOPASSWD: /bin/systemctl restart matrix-pdf-bot.service
+```
+
+**Benefits:**
+- Very simple setup
+- Minimal network usage (~500 bytes per check when no updates)
+- No external dependencies
+- Works with any git hosting (GitHub, GitLab, etc.)
+
+### Option 2: GitHub Actions with SSH (Alternative)
+
+For more control, you can use GitHub Actions to deploy via SSH when you push to master. This requires SSH key setup and is more complex but gives you deployment status in GitHub.
+
 ## Customization
 
 ### AI Prompt Configuration
