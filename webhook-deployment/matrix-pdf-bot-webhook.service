@@ -1,0 +1,31 @@
+[Unit]
+Description=Matrix PDF Bot GitHub Webhook Deployment Service
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=matrixbot
+Group=matrixbot
+WorkingDirectory=/home/matrixbot/matrix-pdf-summarizer-bot/webhook-deployment
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+EnvironmentFile=/home/matrixbot/matrix-pdf-summarizer-bot/webhook-deployment/.env
+ExecStart=/usr/local/bin/uv run webhook_server.py
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=matrix-pdf-bot-webhook
+
+# Security settings
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/log /home/matrixbot/matrix-pdf-summarizer-bot
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+
+[Install]
+WantedBy=multi-user.target

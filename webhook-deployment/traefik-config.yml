@@ -1,0 +1,61 @@
+# Traefik configuration for webhook deployment service
+# Add this configuration to your existing Traefik setup
+
+# Option 1: As a subpath under your existing Matrix domain
+# This assumes you have a Matrix domain like matrix.example.com already configured
+
+http:
+  routers:
+    matrix-pdf-bot-webhook:
+      rule: "Host(`matrix.example.com`) && PathPrefix(`/matrix-pdf-bot-webhook`)"
+      service: matrix-pdf-bot-webhook-service
+      middlewares:
+        - matrix-pdf-bot-webhook-headers
+      # Add TLS configuration if your Matrix setup uses HTTPS
+      tls:
+        certResolver: default
+
+  services:
+    matrix-pdf-bot-webhook-service:
+      loadBalancer:
+        servers:
+          - url: "http://127.0.0.1:8080"
+
+  middlewares:
+    matrix-pdf-bot-webhook-headers:
+      headers:
+        customRequestHeaders:
+          X-Forwarded-Proto: "https"
+        customResponseHeaders:
+          X-Frame-Options: "DENY"
+          X-Content-Type-Options: "nosniff"
+
+---
+
+# Option 2: Alternative configuration using a subdomain
+# If you prefer to use a subdomain like pdf-bot-webhook.example.com
+
+http:
+  routers:
+    matrix-pdf-bot-webhook-subdomain:
+      rule: "Host(`pdf-bot-webhook.example.com`)"
+      service: matrix-pdf-bot-webhook-service
+      middlewares:
+        - matrix-pdf-bot-webhook-headers
+      tls:
+        certResolver: default
+
+  services:
+    matrix-pdf-bot-webhook-service:
+      loadBalancer:
+        servers:
+          - url: "http://127.0.0.1:8080"
+
+  middlewares:
+    matrix-pdf-bot-webhook-headers:
+      headers:
+        customRequestHeaders:
+          X-Forwarded-Proto: "https"
+        customResponseHeaders:
+          X-Frame-Options: "DENY"
+          X-Content-Type-Options: "nosniff"
