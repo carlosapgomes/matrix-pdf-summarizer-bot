@@ -23,22 +23,26 @@ A Matrix bot that automatically detects PDF uploads in a room, extracts their te
 ## Installation
 
 1. Clone this repository:
+
 ```bash
 git clone <repository-url>
 cd matrix-pdf-summarizer-bot
 ```
 
 2. Install dependencies using `uv`:
+
 ```bash
 uv sync
 ```
 
 Alternatively, using pip:
+
 ```bash
 pip install -r requirements.txt
 ```
 
 3. Copy the example environment file and configure it:
+
 ```bash
 cp .env.example .env
 ```
@@ -58,17 +62,20 @@ cp .env.example .env
 ## Running the Bot
 
 Start the bot with:
+
 ```bash
 uv run bot.py
 ```
 
 Or if using a virtual environment:
+
 ```bash
 source .venv/bin/activate
 python bot.py
 ```
 
 The bot will:
+
 1. Connect to your Matrix homeserver
 2. Join the specified room
 3. Listen for PDF file uploads
@@ -78,6 +85,7 @@ The bot will:
 ## Usage
 
 Simply upload a PDF file to the monitored Matrix room. The bot will:
+
 1. Reply with "🧠 Processing `filename.pdf`..."
 2. Download and extract text from the PDF
 3. Remove any repeating watermarks
@@ -95,6 +103,7 @@ Press `Ctrl+C` to gracefully shutdown the bot. The sync position will be saved a
 For deploying the bot on the same server as your Matrix homeserver with resource optimization:
 
 ### 1. Create dedicated user and directory
+
 ```bash
 # Create bot user with limited privileges
 sudo useradd -m -s /bin/bash matrixbot
@@ -106,6 +115,7 @@ cd ~/pdf-bot
 ```
 
 ### 2. Install the bot
+
 ```bash
 # Clone repository
 git clone https://github.com/carlosapgomes/matrix-pdf-summarizer-bot.git .
@@ -119,6 +129,7 @@ uv sync
 ```
 
 ### 3. Configure environment
+
 ```bash
 # Copy and edit configuration
 cp .env.example .env
@@ -126,6 +137,7 @@ nano .env
 ```
 
 Configure with your local Matrix server:
+
 ```bash
 MATRIX_HOMESERVER=http://localhost:8008  # or your Matrix server port
 MATRIX_USER=@pdfbot:yourdomain.com
@@ -137,6 +149,7 @@ LLM_MODEL=gpt-5-mini
 ```
 
 ### 4. Create systemd service with resource limits
+
 ```bash
 sudo nano /etc/systemd/system/matrix-pdf-bot.service
 ```
@@ -174,6 +187,7 @@ WantedBy=multi-user.target
 ```
 
 ### 5. Deploy and start
+
 ```bash
 # Reload systemd and enable service
 sudo systemctl daemon-reload
@@ -185,6 +199,7 @@ sudo systemctl status matrix-pdf-bot.service
 ```
 
 ### 6. Monitor resource usage
+
 ```bash
 # Monitor bot resources
 sudo systemctl status matrix-pdf-bot.service
@@ -196,6 +211,7 @@ htop
 ```
 
 ### Resource Optimizations Applied
+
 - **CPU limit**: 50% maximum CPU usage
 - **Memory limit**: 512MB maximum (adjust based on your VPS specs)
 - **Process priority**: Lower priority (nice=10) so Matrix gets preference
@@ -217,24 +233,27 @@ sudo su - matrixbot
 crontab -e
 
 # Add this line to check for updates every 5 minutes
-*/5 * * * * cd /home/matrixbot/pdf-bot && git fetch && [ $(git rev-list HEAD...origin/master --count) != 0 ] && git pull && sudo systemctl restart matrix-pdf-bot.service
+*/5 * * * * cd /home/matrixbot/pdf-bot && git fetch && [ $(git rev-list HEAD...origin/master --count) != 0 ] && git pull && sudo /usr/bin/systemctl restart matrix-pdf-bot.service
 ```
 
 **How it works:**
+
 - `git fetch` - Downloads latest commit info (lightweight operation)
 - `git rev-list HEAD...origin/master --count` - Counts commits you don't have locally
 - If count > 0, runs `git pull` and restarts the service
 - Only triggers actual deployment when there are new commits
 
 **Setup requirements:**
+
 ```bash
 # Give matrixbot user permission to restart the service
 sudo visudo
 # Add this line:
-matrixbot ALL=(ALL) NOPASSWD: /bin/systemctl restart matrix-pdf-bot.service
+matrixbot ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart matrix-pdf-bot.service
 ```
 
 **Benefits:**
+
 - Very simple setup
 - Minimal network usage (~500 bytes per check when no updates)
 - No external dependencies
@@ -260,18 +279,21 @@ The default prompt is configured for medical report triage in Brazilian Portugue
 The bot supports any OpenAI-compatible API. Examples:
 
 **Local LLM with Ollama:**
+
 ```bash
 LLM_MODEL=llama3.2
 LLM_BASE_URL=http://localhost:11434/v1
 ```
 
 **Azure OpenAI:**
+
 ```bash
 LLM_MODEL=gpt-4
 LLM_BASE_URL=https://your-resource.openai.azure.com/openai/deployments/your-deployment
 ```
 
 **LM Studio:**
+
 ```bash
 LLM_MODEL=local-model
 LLM_BASE_URL=http://localhost:1234/v1
@@ -280,6 +302,7 @@ LLM_BASE_URL=http://localhost:1234/v1
 ## Acknowledgments
 
 This project was built with the assistance of:
+
 - **Claude Sonnet 4.5** via [Claude Code](https://claude.com/claude-code)
 - **GPT-4** for ideation and guidance
 
