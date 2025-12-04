@@ -30,6 +30,7 @@ IMPORTANT ASSESSMENT GUIDELINES:
   • Standard notation: "MID: 3+/3+/3+/3+" (representing femoral/popliteal/posterior tibial/pedal pulses for right lower limb)
   • Symbol notation: "MID: +++/+++/+++/+++" or "MID: ++/-/-/-" (where "+" indicates pulse strength and "-" indicates absence)
   • Mixed notation: "MID: 3/2/1/-" (combining numbers and symbols)
+  • Anatomical inference: If the popliteal pulse is documented as present/normal but the femoral pulse is not explicitly mentioned, you can assume the femoral pulse is normal (since adequate femoral flow is required for a normal popliteal pulse)
 - Diagnostic Imaging: When duplex scan results contradict physical examination findings (e.g., palpable femoral pulse but monophasic flow in common femoral artery), prioritize the duplex scan findings for assessing aortoiliac obstructive disease
 - Organize all diagnostic exams and results chronologically, using the most recent findings for decision-making
 - For acute arterial occlusion assessment, simply state "no signs of acute arterial occlusion" when the "6 Ps" are absent (do not list each absent sign)
