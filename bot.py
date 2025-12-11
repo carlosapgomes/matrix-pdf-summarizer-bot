@@ -253,7 +253,8 @@ async def pdf_worker(worker_id: int, queue: asyncio.Queue):
     while True:
         job = None
         try:
-            job = await queue.get()
+            # Use timeout to prevent indefinite blocking
+            job = await asyncio.wait_for(queue.get(), timeout=30.0)
             start_time = time.time()
             wait_time = start_time - job.enqueued_at
 
@@ -261,33 +262,38 @@ async def pdf_worker(worker_id: int, queue: asyncio.Queue):
                 f"👷 Worker {worker_id} processing {job.filename} (waited {wait_time:.1f}s)"
             )
 
-
-            # Send "processing" message to Matrix
-            await matrix_client.room_send(
-                room_id=job.room.room_id,
-                message_type="m.room.message",
-                content={
-                    "msgtype": "m.text",
-                    "body": f"🧠 Processando `{job.filename}`...",
-                    "m.relates_to": {"m.in_reply_to": {"event_id": job.event.event_id}},
-                },
-            )
-
             try:
-                # Process the PDF
-                summary = await process_pdf(job.file_data, job.filename)
-
-                # Send summary to Matrix
-                await matrix_client.room_send(
-                    room_id=job.room.room_id,
-                    message_type="m.room.message",
-                    content={
-                        "msgtype": "m.text",
-                        "body": f"{summary}",
-                        "m.relates_to": {
-                            "m.in_reply_to": {"event_id": job.event.event_id}
+                # Send "processing" message to Matrix with timeout
+                await asyncio.wait_for(
+                    matrix_client.room_send(
+                        room_id=job.room.room_id,
+                        message_type="m.room.message",
+                        content={
+                            "msgtype": "m.text",
+                            "body": f"🧠 Processando `{job.filename}`...",
+                            "m.relates_to": {"m.in_reply_to": {"event_id": job.event.event_id}},
                         },
-                    },
+                    ), timeout=10.0
+                )
+
+                # Process the PDF with timeout
+                summary = await asyncio.wait_for(
+                    process_pdf(job.file_data, job.filename), timeout=300.0  # 5 minute timeout
+                )
+
+                # Send summary to Matrix with timeout
+                await asyncio.wait_for(
+                    matrix_client.room_send(
+                        room_id=job.room.room_id,
+                        message_type="m.room.message",
+                        content={
+                            "msgtype": "m.text",
+                            "body": f"{summary}",
+                            "m.relates_to": {
+                                "m.in_reply_to": {"event_id": job.event.event_id}
+                            },
+                        },
+                    ), timeout=10.0
                 )
 
                 processing_time = time.time() - start_time
@@ -295,36 +301,63 @@ async def pdf_worker(worker_id: int, queue: asyncio.Queue):
                     f"✅ Worker {worker_id} completed {job.filename} in {processing_time:.1f}s"
                 )
 
-
+            except asyncio.TimeoutError:
+                logger.error(f"⏰ Worker {worker_id} timeout processing {job.filename}")
+                # Send timeout message
+                try:
+                    await asyncio.wait_for(
+                        matrix_client.room_send(
+                            room_id=job.room.room_id,
+                            message_type="m.room.message",
+                            content={
+                                "msgtype": "m.text",
+                                "body": f"⏰ Timeout ao processar `{job.filename}` - tente novamente.",
+                                "m.relates_to": {
+                                    "m.in_reply_to": {"event_id": job.event.event_id}
+                                },
+                            },
+                        ), timeout=10.0
+                    )
+                except Exception:
+                    pass  # Ignore secondary errors
             except Exception as e:
                 logger.exception(
                     f"❌ Worker {worker_id} failed to process {job.filename}: {e}"
                 )
-                # Send error message to Matrix
-                await matrix_client.room_send(
-                    room_id=job.room.room_id,
-                    message_type="m.room.message",
-                    content={
-                        "msgtype": "m.text",
-                        "body": f"❌ Falha ao analisar `{job.filename}`: {e}",
-                        "m.relates_to": {
-                            "m.in_reply_to": {"event_id": job.event.event_id}
-                        },
-                    },
-                )
+                # Send error message
+                try:
+                    await asyncio.wait_for(
+                        matrix_client.room_send(
+                            room_id=job.room.room_id,
+                            message_type="m.room.message",
+                            content={
+                                "msgtype": "m.text",
+                                "body": f"❌ Falha ao analisar `{job.filename}`: {str(e)[:100]}",
+                                "m.relates_to": {
+                                    "m.in_reply_to": {"event_id": job.event.event_id}
+                                },
+                            },
+                        ), timeout=10.0
+                    )
+                except Exception:
+                    pass  # Ignore secondary errors
 
-            # Explicit cleanup of PDF data
-            job.file_data = b""
-
+        except asyncio.TimeoutError:
+            # Queue timeout - continue to next iteration
+            continue
         except asyncio.CancelledError:
             logger.info(f"👷 Worker {worker_id} cancelled")
             break
         except Exception as e:
             logger.exception(f"❌ Worker {worker_id} unexpected error: {e}")
+            # Small delay to prevent rapid error loops
+            await asyncio.sleep(1)
         finally:
             # Only mark task done if we actually got a job from the queue
             if job is not None:
                 queue.task_done()
+                # Clean up job data
+                job.file_data = b""
 
 
 # -------------------------------------------------------------------
@@ -370,19 +403,26 @@ async def message_callback(room: MatrixRoom, event: RoomMessageMedia):
             enqueued_at=time.time(),
         )
 
-        await pdf_queue.put(job)
-        logger.info(f"📥 Queued {event.body} (queue size: {pdf_queue.qsize()})")
+        # Use timeout for queue put to prevent indefinite blocking
+        try:
+            await asyncio.wait_for(pdf_queue.put(job), timeout=5.0)
+            logger.info(f"📥 Queued {event.body} (queue size: {pdf_queue.qsize()})")
 
-        # Optional: acknowledge receipt
-        await matrix_client.room_send(
-            room_id=MATRIX_ROOM_ID,
-            message_type="m.room.message",
-            content={
-                "msgtype": "m.text",
-                "body": f"📋 `{event.body}` adicionado à fila de processamento",
-                "m.relates_to": {"m.in_reply_to": {"event_id": event.event_id}},
-            },
-        )
+            # Optional: acknowledge receipt with timeout
+            await asyncio.wait_for(
+                matrix_client.room_send(
+                    room_id=MATRIX_ROOM_ID,
+                    message_type="m.room.message",
+                    content={
+                        "msgtype": "m.text",
+                        "body": f"📋 `{event.body}` adicionado à fila de processamento",
+                        "m.relates_to": {"m.in_reply_to": {"event_id": event.event_id}},
+                    },
+                ), timeout=10.0
+            )
+        except asyncio.TimeoutError:
+            logger.error(f"⏰ Timeout enqueueing {event.body} or sending acknowledgment")
+            return
     except Exception as e:
         logger.exception(f"❌ Error handling PDF upload {event.body}: {e}")
         await matrix_client.room_send(
@@ -422,8 +462,8 @@ async def main():
 
     # Initialize PDF processing queue and workers
     global pdf_queue, worker_tasks
-    max_workers = int(os.getenv("MAX_CONCURRENT_WORKERS", "3"))
-    queue_max_size = int(os.getenv("QUEUE_MAX_SIZE", "100"))
+    max_workers = int(os.getenv("MAX_CONCURRENT_WORKERS", "2"))  # Reduced from 3 to 2
+    queue_max_size = int(os.getenv("QUEUE_MAX_SIZE", "50"))  # Reduced from 100 to 50
 
     pdf_queue = asyncio.Queue(maxsize=queue_max_size)
     logger.info(f"📦 Created job queue (max size: {queue_max_size})")
@@ -464,7 +504,7 @@ async def main():
     logger.info("👀 Listening for PDF uploads...")
 
     try:
-        await matrix_client.sync_forever(timeout=30000, since=next_batch)
+        await matrix_client.sync_forever(timeout=15000, since=next_batch)  # Reduced timeout from 30s to 15s
     except (KeyboardInterrupt, asyncio.CancelledError):
         logger.info("👋 Shutting down...")
     except Exception as e:
@@ -474,21 +514,26 @@ async def main():
         # Stop accepting new jobs
         logger.info("🛑 Stopping job queue...")
 
-        # Wait for pending jobs to complete (with timeout)
-        if pdf_queue:
-            try:
-                await asyncio.wait_for(pdf_queue.join(), timeout=60.0)
-                logger.info("✅ All queued jobs completed")
-            except asyncio.TimeoutError:
-                logger.warning(f"⚠️ Timeout: {pdf_queue.qsize()} jobs still pending")
-
-        # Cancel workers
+        # Cancel workers immediately
         for task in worker_tasks:
             task.cancel()
 
-        # Wait for worker cancellation
-        await asyncio.gather(*worker_tasks, return_exceptions=True)
-        logger.info("✅ Workers stopped")
+        # Wait for worker cancellation with shorter timeout
+        try:
+            await asyncio.wait_for(
+                asyncio.gather(*worker_tasks, return_exceptions=True), timeout=30.0
+            )
+            logger.info("✅ Workers stopped")
+        except asyncio.TimeoutError:
+            logger.warning("⚠️ Timeout stopping workers")
+
+        # Try to wait for pending jobs (shorter timeout)
+        if pdf_queue:
+            try:
+                await asyncio.wait_for(pdf_queue.join(), timeout=15.0)
+                logger.info("✅ All queued jobs completed")
+            except asyncio.TimeoutError:
+                logger.warning(f"⚠️ Timeout: {pdf_queue.qsize()} jobs still pending")
 
         # Save the current sync token before closing
         if matrix_client.next_batch:
