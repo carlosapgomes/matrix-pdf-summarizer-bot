@@ -310,6 +310,7 @@ async def pdf_worker(worker_id: int, queue: asyncio.Queue):
     logger.info(f"👷 Worker {worker_id} started")
 
     while True:
+        job = None
         try:
             job = await queue.get()
             start_time = time.time()
@@ -375,25 +376,22 @@ async def pdf_worker(worker_id: int, queue: asyncio.Queue):
                     },
                 )
 
+            # Explicit cleanup of PDF data and force garbage collection
+            job.file_data = b""
+            gc.collect()
+
+            # Log memory after cleanup
+            log_memory_usage("After cleanup", worker_id)
+
         except asyncio.CancelledError:
             logger.info(f"👷 Worker {worker_id} cancelled")
             break
         except Exception as e:
             logger.exception(f"❌ Worker {worker_id} unexpected error: {e}")
         finally:
-            # Explicit cleanup of PDF data and force garbage collection
-            if "job" in locals():
-                # Clear large file data from memory
-                job.file_data = b""
-                del job
-
-            # Force garbage collection after processing large files
-            gc.collect()
-
-            # Log memory after cleanup
-            log_memory_usage("After cleanup", worker_id)
-
-            queue.task_done()
+            # Only mark task done if we actually got a job from the queue
+            if job is not None:
+                queue.task_done()
 
 
 # -------------------------------------------------------------------
