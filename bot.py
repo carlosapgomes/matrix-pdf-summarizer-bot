@@ -6,7 +6,6 @@ import logging
 import os
 import time
 from dataclasses import dataclass
-import psutil
 from pypdf import PdfReader
 from openai import AsyncOpenAI
 from nio import (
@@ -83,64 +82,6 @@ pdf_queue: asyncio.Queue = None  # Initialized in main()
 worker_tasks: list[asyncio.Task] = []  # Track worker tasks
 
 
-# -------------------------------------------------------------------
-# Memory Monitoring Functions
-# -------------------------------------------------------------------
-def get_memory_info():
-    """Get current process memory usage in MB."""
-    process = psutil.Process()
-    memory_info = process.memory_info()
-    return {
-        "rss_mb": memory_info.rss / 1024 / 1024,  # Resident Set Size
-        "vms_mb": memory_info.vms / 1024 / 1024,  # Virtual Memory Size
-        "percent": process.memory_percent(),
-    }
-
-
-def get_system_memory_info():
-    """Get system memory usage information."""
-    mem = psutil.virtual_memory()
-    return {
-        "total_mb": mem.total / 1024 / 1024,
-        "available_mb": mem.available / 1024 / 1024,
-        "used_mb": mem.used / 1024 / 1024,
-        "percent": mem.percent,
-    }
-
-
-def log_memory_usage(context: str, worker_id: int = None):
-    """Log current memory usage with context."""
-    process_mem = get_memory_info()
-    system_mem = get_system_memory_info()
-
-    worker_prefix = f"Worker {worker_id} " if worker_id is not None else ""
-    logger.info(
-        f"📊 {worker_prefix}{context} - "
-        f"Process: {process_mem['rss_mb']:.1f}MB ({process_mem['percent']:.1f}%) | "
-        f"System: {system_mem['used_mb']:.0f}/{system_mem['total_mb']:.0f}MB ({system_mem['percent']:.1f}%)"
-    )
-
-
-def check_memory_pressure():
-    """Check if system is under memory pressure."""
-    process_mem = get_memory_info()
-    system_mem = get_system_memory_info()
-
-    # Memory pressure thresholds
-    PROCESS_MEMORY_LIMIT_MB = 1500  # 1.5GB process limit (below 2GB systemd limit)
-    SYSTEM_MEMORY_THRESHOLD = 80  # 80% system memory usage
-
-    process_pressure = process_mem["rss_mb"] > PROCESS_MEMORY_LIMIT_MB
-    system_pressure = system_mem["percent"] > SYSTEM_MEMORY_THRESHOLD
-
-    if process_pressure or system_pressure:
-        logger.warning(
-            f"⚠️ Memory pressure detected - "
-            f"Process: {process_mem['rss_mb']:.1f}MB "
-            f"System: {system_mem['percent']:.1f}%"
-        )
-        return True
-    return False
 
 
 # -------------------------------------------------------------------
@@ -320,8 +261,6 @@ async def pdf_worker(worker_id: int, queue: asyncio.Queue):
                 f"👷 Worker {worker_id} processing {job.filename} (waited {wait_time:.1f}s)"
             )
 
-            # Log memory before processing
-            log_memory_usage(f"Starting {job.filename}", worker_id)
 
             # Send "processing" message to Matrix
             await matrix_client.room_send(
@@ -356,8 +295,6 @@ async def pdf_worker(worker_id: int, queue: asyncio.Queue):
                     f"✅ Worker {worker_id} completed {job.filename} in {processing_time:.1f}s"
                 )
 
-                # Log memory after successful processing
-                log_memory_usage(f"Completed {job.filename}", worker_id)
 
             except Exception as e:
                 logger.exception(
@@ -376,12 +313,8 @@ async def pdf_worker(worker_id: int, queue: asyncio.Queue):
                     },
                 )
 
-            # Explicit cleanup of PDF data and force garbage collection
+            # Explicit cleanup of PDF data
             job.file_data = b""
-            gc.collect()
-
-            # Log memory after cleanup
-            log_memory_usage("After cleanup", worker_id)
 
         except asyncio.CancelledError:
             logger.info(f"👷 Worker {worker_id} cancelled")
@@ -422,19 +355,6 @@ async def message_callback(room: MatrixRoom, event: RoomMessageMedia):
 
         file_data = download_response.body
         logger.info(f"✅ Downloaded PDF ({len(file_data)} bytes)")
-
-        # Check memory pressure before enqueueing
-        if check_memory_pressure():
-            await matrix_client.room_send(
-                room_id=MATRIX_ROOM_ID,
-                message_type="m.room.message",
-                content={
-                    "msgtype": "m.text",
-                    "body": f"⚠️ Sistema com alta utilização de memória. `{event.body}` será processado quando houver recursos disponíveis.",
-                    "m.relates_to": {"m.in_reply_to": {"event_id": event.event_id}},
-                },
-            )
-            # Still enqueue but warn user
 
         # Check file size (warn for very large files)
         file_size_mb = len(file_data) / 1024 / 1024
@@ -496,8 +416,6 @@ async def main():
     logger.info(f"👤 User: {MATRIX_USER}")
     logger.info(f"📍 Room ID: {MATRIX_ROOM_ID}")
 
-    # Log initial system memory state
-    log_memory_usage("Bot startup")
 
     matrix_client, next_batch = await load_client()
     await login_if_needed(matrix_client)
