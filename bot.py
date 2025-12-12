@@ -1,9 +1,8 @@
 import asyncio
-import io
 import json
 import logging
 import os
-from pypdf import PdfReader
+from concurrent.futures import ThreadPoolExecutor
 from openai import AsyncOpenAI
 from nio import (
     AsyncClient,
@@ -16,6 +15,8 @@ from nio import (
 )
 from dotenv import load_dotenv
 from user_interactions import dm_callback, mention_callback, invite_callback
+from job_queue import JobQueue, Job
+from pdf_processor import process_pdf_async
 
 # -------------------------------------------------------------------
 # Load environment variables
@@ -40,6 +41,13 @@ LLM_MAX_TOKENS = (
     int(os.getenv("LLM_MAX_TOKENS")) if os.getenv("LLM_MAX_TOKENS") else None
 )
 
+# Job Queue Configuration
+JOB_DB_PATH = os.getenv("JOB_DB_PATH", "jobs.db")
+MAX_WORKER_THREADS = int(os.getenv("MAX_WORKER_THREADS", "3"))
+JOB_CLEANUP_HOURS = int(os.getenv("JOB_CLEANUP_HOURS", "24"))
+MAX_JOB_RETRIES = int(os.getenv("MAX_JOB_RETRIES", "3"))
+COMPLETED_JOB_POLL_SECONDS = int(os.getenv("COMPLETED_JOB_POLL_SECONDS", "5"))
+
 # -------------------------------------------------------------------
 # Logging
 # -------------------------------------------------------------------
@@ -54,12 +62,24 @@ logger = logging.getLogger("matrix-pdf-bot")
 # Globals
 # -------------------------------------------------------------------
 matrix_client: AsyncClient | None = None
+job_queue: JobQueue | None = None
+pdf_executor: ThreadPoolExecutor | None = None
 
 # Initialize OpenAI client with optional base_url for compatible APIs
 llm_client_kwargs = {"api_key": OPENAI_API_KEY}
 if LLM_BASE_URL:
     llm_client_kwargs["base_url"] = LLM_BASE_URL
 llm_client = AsyncOpenAI(**llm_client_kwargs)
+
+# LLM configuration for PDF processor
+llm_config = {
+    "model": LLM_MODEL,
+    "temperature": LLM_TEMPERATURE,
+    "max_tokens": LLM_MAX_TOKENS,
+}
+
+# In-memory storage for job file data (since SQLite doesn't store blobs efficiently)
+job_file_data = {}
 
 
 # -------------------------------------------------------------------
@@ -115,110 +135,120 @@ async def login_if_needed(client: AsyncClient):
 
 
 # -------------------------------------------------------------------
-# PDF → Text → LLM summary pipeline
+# Background job processing
 # -------------------------------------------------------------------
-def remove_watermark(text: str) -> str:
-    """Remove repeating 5-digit watermark sequences from text."""
-    import re
-    from collections import Counter
+async def process_jobs_background():
+    """Background task that processes pending jobs."""
+    while True:
+        try:
+            job = job_queue.get_next_job()
+            if job:
+                # Get file data from memory
+                file_data = job_file_data.get(job.id)
+                if file_data is None:
+                    logger.error(f"❌ File data not found for job {job.id}")
+                    job_queue.fail_job(job.id, "File data not found")
+                    continue
 
-    # Find all 5-digit sequences in the text
-    five_digit_pattern = re.compile(r"\b\d{5}\b")
-    matches = five_digit_pattern.findall(text)
+                job.file_data = file_data
 
-    if not matches:
-        return text
+                try:
+                    # Process PDF using thread pool
+                    summary = await process_pdf_async(
+                        job, PROMPT_FILE, llm_client, llm_config
+                    )
 
-    # Count occurrences of each 5-digit sequence
-    counter = Counter(matches)
+                    # Mark job as completed
+                    job_queue.complete_job(job.id, summary)
 
-    # Find the most common sequence (likely the watermark)
-    if counter:
-        most_common_seq, count = counter.most_common(1)[0]
+                    # Clean up file data from memory
+                    if job.id in job_file_data:
+                        del job_file_data[job.id]
 
-        # Only remove if it appears multiple times (likely a watermark)
-        if count >= 3:
-            logger.info(
-                f"🧹 Removing watermark '{most_common_seq}' ({count} occurrences)"
-            )
+                except Exception as e:
+                    logger.error(f"❌ Error processing job {job.id}: {e}")
+                    job_queue.fail_job(job.id, str(e))
 
-            # Remove all instances of the watermark sequence
-            # Use word boundary to avoid removing legitimate numbers
-            watermark_pattern = re.compile(
-                r"\b" + re.escape(most_common_seq) + r"\b\s*"
-            )
-            cleaned_text = watermark_pattern.sub("", text)
-            return cleaned_text
+                    # Clean up file data on failure too
+                    if job.id in job_file_data:
+                        del job_file_data[job.id]
+            else:
+                # No jobs to process, wait a bit
+                await asyncio.sleep(1)
 
-    return text
-
-
-def extract_pdf_text(file_bytes: bytes) -> str:
-    """Extract text from a pure (non-scanned) PDF."""
-    try:
-        reader = PdfReader(io.BytesIO(file_bytes))
-        text = "\n".join(page.extract_text() or "" for page in reader.pages)
-        return text.strip()
-    except Exception as e:
-        logger.error(f"❌ Error extracting PDF text: {e}")
-        raise
+        except Exception as e:
+            logger.error(f"❌ Error in job processor: {e}")
+            await asyncio.sleep(5)  # Wait longer on error
 
 
-async def summarize_text(text: str, instructions: str) -> str:
-    """Use LLM to summarize a given text with instructions."""
-    # Build API call parameters
-    api_params = {
-        "model": LLM_MODEL,
-        "messages": [
-            {"role": "system", "content": instructions},
-            {"role": "user", "content": text},  # GPT-5-mini can handle large inputs
-        ],
-    }
+async def send_results_background():
+    """Background task that sends results for completed jobs."""
+    while True:
+        try:
+            completed_jobs = job_queue.get_completed_jobs()
+            for job in completed_jobs:
+                try:
+                    await send_job_result(job)
+                    job_queue.remove_job(job.id)
+                except Exception as e:
+                    logger.error(f"❌ Error sending result for job {job.id}: {e}")
 
-    # Add optional parameters if configured
-    if LLM_TEMPERATURE is not None:
-        api_params["temperature"] = LLM_TEMPERATURE
-    if LLM_MAX_TOKENS is not None:
-        api_params["max_tokens"] = LLM_MAX_TOKENS
+            # Also handle failed jobs
+            failed_jobs = job_queue.get_failed_jobs()
+            for job in failed_jobs:
+                try:
+                    await send_job_failure(job)
+                    job_queue.remove_job(job.id)
+                except Exception as e:
+                    logger.error(
+                        f"❌ Error sending failure message for job {job.id}: {e}"
+                    )
 
-    response = await llm_client.chat.completions.create(**api_params)
-    return response.choices[0].message.content.strip()
+            await asyncio.sleep(COMPLETED_JOB_POLL_SECONDS)
 
-
-def load_prompt(prompt_file_path: str) -> str:
-    """Load prompt instructions from a file."""
-    try:
-        with open(prompt_file_path, "r", encoding="utf-8") as f:
-            prompt = f.read().strip()
-        logger.info(f"📝 Loaded prompt from {prompt_file_path}")
-        return prompt
-    except FileNotFoundError:
-        logger.error(f"❌ Prompt file not found: {prompt_file_path}")
-        raise
-    except Exception as e:
-        logger.error(f"❌ Error loading prompt file: {e}")
-        raise
+        except Exception as e:
+            logger.error(f"❌ Error in result sender: {e}")
+            await asyncio.sleep(5)  # Wait longer on error
 
 
-async def process_pdf(file_bytes: bytes, filename: str) -> str:
-    """Full pipeline: extract → clean → summarize → return summary text."""
-    text = extract_pdf_text(file_bytes)
-    logger.info(f"📄 Extracted {len(text)} characters from PDF")
+async def send_job_result(job: Job):
+    """Send the job result back to the Matrix room."""
+    await matrix_client.room_send(
+        room_id=job.room_id,
+        message_type="m.room.message",
+        content={
+            "msgtype": "m.text",
+            "body": f"{job.result}",
+            "m.relates_to": {"m.in_reply_to": {"event_id": job.event_id}},
+        },
+    )
+    logger.info(f"✅ Summary for {job.filename} sent to Matrix room")
 
-    if not text:
-        logger.warning(f"⚠️ No text extracted from {filename}")
 
-    # Remove watermark sequences
-    cleaned_text = remove_watermark(text)
+async def send_job_failure(job: Job):
+    """Send a failure message back to the Matrix room."""
+    await matrix_client.room_send(
+        room_id=job.room_id,
+        message_type="m.room.message",
+        content={
+            "msgtype": "m.text",
+            "body": f"❌ Falha ao analisar `{job.filename}`: {job.error_message}",
+            "m.relates_to": {"m.in_reply_to": {"event_id": job.event_id}},
+        },
+    )
+    logger.error(f"💥 Failure message for {job.filename} sent to Matrix room")
 
-    # Load instructions from external prompt file
-    instructions = load_prompt(PROMPT_FILE)
 
-    logger.info("🤖 Sending to LLM for summarization...")
-    summary = await summarize_text(cleaned_text, instructions)
-    logger.info(f"✅ Summary generated ({len(summary)} characters)")
-
-    return summary
+async def cleanup_jobs_periodic():
+    """Periodic cleanup of old completed jobs."""
+    while True:
+        try:
+            await asyncio.sleep(3600)  # Run every hour
+            deleted_count = job_queue.cleanup_old_jobs(JOB_CLEANUP_HOURS)
+            if deleted_count > 0:
+                logger.info(f"🧹 Cleaned up {deleted_count} old jobs")
+        except Exception as e:
+            logger.error(f"❌ Error in periodic cleanup: {e}")
 
 
 # -------------------------------------------------------------------
@@ -240,48 +270,64 @@ async def message_callback(room: MatrixRoom, event: RoomMessageMedia):
 
     logger.info(f"📥 Detected PDF upload: {event.body}")
 
+    # Download PDF immediately
     download_response = await matrix_client.download(event.url)
 
     if not download_response or not hasattr(download_response, "body"):
         logger.warning("⚠️ Failed to download PDF")
+        await matrix_client.room_send(
+            room_id=MATRIX_ROOM_ID,
+            message_type="m.room.message",
+            content={
+                "msgtype": "m.text",
+                "body": f"❌ Falha ao baixar `{event.body}`",
+                "m.relates_to": {"m.in_reply_to": {"event_id": event.event_id}},
+            },
+        )
         return
 
     file_data = download_response.body
     logger.info(f"✅ Downloaded PDF ({len(file_data)} bytes)")
 
-    await matrix_client.room_send(
-        room_id=MATRIX_ROOM_ID,
-        message_type="m.room.message",
-        content={
-            "msgtype": "m.text",
-            "body": f"🧠 Processando `{event.body}`...",
-            "m.relates_to": {"m.in_reply_to": {"event_id": event.event_id}},
-        },
+    # Create job and add to queue
+    job = Job.create(
+        filename=event.body,
+        file_url=event.url,
+        event_id=event.event_id,
+        room_id=room.room_id,
+        file_data=file_data,
     )
 
-    try:
-        summary = await process_pdf(file_data, event.body)
+    # Store file data in memory (separate from database)
+    job_file_data[job.id] = file_data
+
+    # Add job to queue
+    if job_queue.add_job(job):
+        # Send immediate processing message
         await matrix_client.room_send(
             room_id=MATRIX_ROOM_ID,
             message_type="m.room.message",
             content={
                 "msgtype": "m.text",
-                "body": f"{summary}",
+                "body": f"🧠 Processando `{event.body}`...",
                 "m.relates_to": {"m.in_reply_to": {"event_id": event.event_id}},
             },
         )
-        logger.info(f"✅ Summary for {event.body} sent to Matrix room.")
-    except Exception as e:
-        logger.exception("Error summarizing PDF")
+        logger.info(f"✅ Queued job for {event.body}")
+    else:
+        # Failed to add job to queue
         await matrix_client.room_send(
             room_id=MATRIX_ROOM_ID,
             message_type="m.room.message",
             content={
                 "msgtype": "m.text",
-                "body": f"❌ Falha ao analizar `{event.body}`: {e}",
+                "body": f"❌ Falha ao processar `{event.body}` - erro interno",
                 "m.relates_to": {"m.in_reply_to": {"event_id": event.event_id}},
             },
         )
+        # Clean up file data
+        if job.id in job_file_data:
+            del job_file_data[job.id]
 
 
 # -------------------------------------------------------------------
@@ -297,12 +343,21 @@ async def sync_callback(response):
 # Main
 # -------------------------------------------------------------------
 async def main():
-    global matrix_client
+    global matrix_client, job_queue, pdf_executor
 
-    logger.info("🚀 Starting Matrix PDF Summarizer Bot")
+    logger.info("🚀 Starting Matrix PDF Summarizer Bot with Concurrent Processing")
     logger.info(f"🏠 Homeserver: {MATRIX_HOMESERVER}")
     logger.info(f"👤 User: {MATRIX_USER}")
     logger.info(f"📍 Room ID: {MATRIX_ROOM_ID}")
+    logger.info(f"⚙️ Max worker threads: {MAX_WORKER_THREADS}")
+
+    # Initialize job queue
+    job_queue = JobQueue(db_path=JOB_DB_PATH, max_retries=MAX_JOB_RETRIES)
+    logger.info(f"📊 Job queue initialized: {JOB_DB_PATH}")
+
+    # Initialize thread pool for PDF processing
+    pdf_executor = ThreadPoolExecutor(max_workers=MAX_WORKER_THREADS)
+    logger.info(f"🔧 Thread pool executor created with {MAX_WORKER_THREADS} workers")
 
     matrix_client, next_batch = await load_client()
     await login_if_needed(matrix_client)
@@ -334,6 +389,12 @@ async def main():
         InviteMemberEvent,
     )
 
+    # Start background tasks
+    logger.info("🔄 Starting background tasks...")
+    job_processor_task = asyncio.create_task(process_jobs_background())
+    result_sender_task = asyncio.create_task(send_results_background())
+    cleanup_task = asyncio.create_task(cleanup_jobs_periodic())
+
     logger.info("👀 Listening for PDF uploads...")
 
     try:
@@ -344,6 +405,31 @@ async def main():
         logger.error(f"❌ Unexpected error: {e}")
         logger.exception(e)
     finally:
+        # Cancel background tasks
+        logger.info("⏹️ Stopping background tasks...")
+        job_processor_task.cancel()
+        result_sender_task.cancel()
+        cleanup_task.cancel()
+
+        # Wait for tasks to finish with timeout
+        try:
+            await asyncio.wait_for(
+                asyncio.gather(
+                    job_processor_task,
+                    result_sender_task,
+                    cleanup_task,
+                    return_exceptions=True,
+                ),
+                timeout=5.0,
+            )
+        except asyncio.TimeoutError:
+            logger.warning("⚠️ Background tasks didn't stop within timeout")
+
+        # Shutdown thread pool
+        if pdf_executor:
+            logger.info("🔧 Shutting down thread pool executor...")
+            pdf_executor.shutdown(wait=True, cancel_futures=False)
+
         # Save the current sync token before closing
         if matrix_client.next_batch:
             await store_session(matrix_client, matrix_client.next_batch, log=True)
