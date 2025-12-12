@@ -1,5 +1,4 @@
 import asyncio
-import gc
 import io
 import json
 import logging
@@ -65,8 +64,9 @@ if LLM_BASE_URL:
     llm_client_kwargs["base_url"] = LLM_BASE_URL
 llm_client = AsyncOpenAI(**llm_client_kwargs)
 
-# PDF Processing Thread Pool
-thread_pool_executor: ThreadPoolExecutor = None  # Initialized in main()
+# PDF Processing Thread Pool  
+thread_pool_executor: ThreadPoolExecutor = None  # Lazy initialized when needed
+_max_workers = 3  # Default value
 
 
 
@@ -244,6 +244,16 @@ def process_pdf_sync(file_bytes: bytes, filename: str) -> str:
 
 async def process_pdf(file_bytes: bytes, filename: str) -> str:
     """Async wrapper that runs PDF processing in thread pool."""
+    global thread_pool_executor
+    
+    # Lazy initialization - only create threads when actually needed
+    if thread_pool_executor is None:
+        thread_pool_executor = ThreadPoolExecutor(
+            max_workers=_max_workers, 
+            thread_name_prefix="PDFWorker"
+        )
+        logger.info(f"🧵 Created thread pool with {_max_workers} workers (lazy init)")
+    
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(
         thread_pool_executor, process_pdf_sync, file_bytes, filename
@@ -356,12 +366,10 @@ async def main():
     matrix_client, next_batch = await load_client()
     await login_if_needed(matrix_client)
 
-    # Initialize PDF processing thread pool
-    global thread_pool_executor
-    max_workers = int(os.getenv("MAX_CONCURRENT_WORKERS", "3"))  # Back to 3 since we're using threads
-    
-    thread_pool_executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="PDFWorker")
-    logger.info(f"🧵 Created thread pool with {max_workers} workers")
+    # Configure PDF processing thread pool (lazy initialization)
+    global _max_workers
+    _max_workers = int(os.getenv("MAX_CONCURRENT_WORKERS", "3"))
+    logger.info(f"📋 Configured for {_max_workers} worker threads (will be created when needed)")
 
     # Set the sync token if we have one
     if next_batch:
@@ -400,14 +408,13 @@ async def main():
         logger.error(f"❌ Unexpected error: {e}")
         logger.exception(e)
     finally:
-        # Stop accepting new jobs
-        logger.info("🛑 Stopping job queue...")
-
-        # Shutdown thread pool
+        # Shutdown thread pool if it was created
         if thread_pool_executor:
             logger.info("🛑 Shutting down thread pool...")
             thread_pool_executor.shutdown(wait=True, timeout=60.0)
             logger.info("✅ Thread pool stopped")
+        else:
+            logger.info("ℹ️ No thread pool to shutdown (never used)")
 
         # Save the current sync token before closing
         if matrix_client.next_batch:
