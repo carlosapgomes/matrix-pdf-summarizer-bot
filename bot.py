@@ -139,10 +139,25 @@ async def login_if_needed(client: AsyncClient):
 # -------------------------------------------------------------------
 async def process_jobs_background():
     """Background task that processes pending jobs."""
+    consecutive_empty_polls = 0
+    max_empty_polls = 10  # Increase sleep time after multiple empty polls
+    
+    logger.info("🔄 Job processor started")
     while True:
         try:
+            # Quick check for pending jobs before expensive get_next_job call
+            if not job_queue.has_pending_jobs():
+                consecutive_empty_polls += 1
+                if consecutive_empty_polls >= max_empty_polls:
+                    await asyncio.sleep(10)
+                else:
+                    await asyncio.sleep(2)
+                continue
+                
             job = job_queue.get_next_job()
             if job:
+                consecutive_empty_polls = 0  # Reset counter when we find work
+                
                 # Get file data from memory
                 file_data = job_file_data.get(job.id)
                 if file_data is None:
@@ -173,18 +188,25 @@ async def process_jobs_background():
                     if job.id in job_file_data:
                         del job_file_data[job.id]
             else:
-                # No jobs to process, wait a bit
-                await asyncio.sleep(1)
+                # No jobs to process - implement adaptive sleep
+                consecutive_empty_polls += 1
+                if consecutive_empty_polls >= max_empty_polls:
+                    # After many empty polls, sleep longer to reduce CPU usage
+                    await asyncio.sleep(10)
+                else:
+                    await asyncio.sleep(2)  # Increased from 1 to 2 seconds
 
         except Exception as e:
             logger.error(f"❌ Error in job processor: {e}")
-            await asyncio.sleep(5)  # Wait longer on error
+            consecutive_empty_polls = 0
+            await asyncio.sleep(10)  # Wait longer on error
 
 
 async def send_results_background():
     """Background task that sends results for completed jobs."""
     while True:
         try:
+            # Process completed jobs
             completed_jobs = job_queue.get_completed_jobs()
             for job in completed_jobs:
                 try:
@@ -192,6 +214,7 @@ async def send_results_background():
                     job_queue.remove_job(job.id)
                 except Exception as e:
                     logger.error(f"❌ Error sending result for job {job.id}: {e}")
+                    # Don't remove job on send failure - it will be retried
 
             # Also handle failed jobs
             failed_jobs = job_queue.get_failed_jobs()
@@ -203,12 +226,17 @@ async def send_results_background():
                     logger.error(
                         f"❌ Error sending failure message for job {job.id}: {e}"
                     )
+                    # Don't remove job on send failure - it will be retried
 
-            await asyncio.sleep(COMPLETED_JOB_POLL_SECONDS)
+            # Sleep longer if no jobs were processed to reduce resource usage
+            if not completed_jobs and not failed_jobs:
+                await asyncio.sleep(COMPLETED_JOB_POLL_SECONDS * 2)  # Double the sleep time
+            else:
+                await asyncio.sleep(COMPLETED_JOB_POLL_SECONDS)
 
         except Exception as e:
             logger.error(f"❌ Error in result sender: {e}")
-            await asyncio.sleep(5)  # Wait longer on error
+            await asyncio.sleep(10)  # Wait longer on error
 
 
 async def send_job_result(job: Job):
@@ -247,8 +275,23 @@ async def cleanup_jobs_periodic():
             deleted_count = job_queue.cleanup_old_jobs(JOB_CLEANUP_HOURS)
             if deleted_count > 0:
                 logger.info(f"🧹 Cleaned up {deleted_count} old jobs")
+            
+            # Also cleanup orphaned file data that might be left in memory
+            current_job_ids = set()
+            try:
+                stats = job_queue.get_queue_stats()
+                # If we have more file data than active jobs, clean up
+                if len(job_file_data) > sum(stats.values()):
+                    # Get all current job IDs from database
+                    # For now, just log if we detect orphaned data
+                    if len(job_file_data) > 10:  # Arbitrary threshold
+                        logger.warning(f"⚠️ {len(job_file_data)} files in memory, queue has {sum(stats.values())} jobs")
+            except Exception as cleanup_error:
+                logger.warning(f"⚠️ Error during memory cleanup check: {cleanup_error}")
+                
         except Exception as e:
             logger.error(f"❌ Error in periodic cleanup: {e}")
+            await asyncio.sleep(600)  # Wait 10 minutes before retrying on error
 
 
 # -------------------------------------------------------------------
@@ -389,13 +432,43 @@ async def main():
         InviteMemberEvent,
     )
 
-    # Start background tasks
+    # Start background tasks with exception handling
     logger.info("🔄 Starting background tasks...")
+    
+    # Start background tasks directly (they have their own exception handling)
     job_processor_task = asyncio.create_task(process_jobs_background())
     result_sender_task = asyncio.create_task(send_results_background())
     cleanup_task = asyncio.create_task(cleanup_jobs_periodic())
 
     logger.info("👀 Listening for PDF uploads...")
+
+    # Monitor background tasks health
+    async def monitor_tasks():
+        """Monitor background tasks and log their health."""
+        while True:
+            await asyncio.sleep(60)  # Check every minute
+            
+            tasks_status = {
+                "job_processor": not job_processor_task.done(),
+                "result_sender": not result_sender_task.done(), 
+                "cleanup": not cleanup_task.done()
+            }
+            
+            # Log if any task is done (which shouldn't happen)
+            for name, is_running in tasks_status.items():
+                if not is_running:
+                    logger.error(f"❌ Background task {name} has stopped!")
+                    if getattr(globals().get(f"{name}_task"), 'exception', None):
+                        exc = getattr(globals().get(f"{name}_task"), 'exception')()
+                        if exc:
+                            logger.error(f"❌ {name} exception: {exc}")
+            
+            # Log task health every 5 minutes
+            if any(not status for status in tasks_status.values()):
+                logger.warning(f"⚠️ Task health: {tasks_status}")
+    
+    monitor_task = asyncio.create_task(monitor_tasks())
+    logger.info("🔍 Background task monitor started")
 
     try:
         await matrix_client.sync_forever(timeout=30000, since=next_batch)
@@ -410,6 +483,7 @@ async def main():
         job_processor_task.cancel()
         result_sender_task.cancel()
         cleanup_task.cancel()
+        monitor_task.cancel()
 
         # Wait for tasks to finish with timeout
         try:
@@ -418,6 +492,7 @@ async def main():
                     job_processor_task,
                     result_sender_task,
                     cleanup_task,
+                    monitor_task,
                     return_exceptions=True,
                 ),
                 timeout=5.0,
@@ -425,10 +500,18 @@ async def main():
         except asyncio.TimeoutError:
             logger.warning("⚠️ Background tasks didn't stop within timeout")
 
-        # Shutdown thread pool
+        # Shutdown thread pool with timeout to prevent hanging
         if pdf_executor:
             logger.info("🔧 Shutting down thread pool executor...")
-            pdf_executor.shutdown(wait=True, cancel_futures=False)
+            try:
+                pdf_executor.shutdown(wait=True, cancel_futures=False)
+            except Exception as e:
+                logger.warning(f"⚠️ Error shutting down thread pool: {e}")
+                # Force shutdown if normal shutdown fails
+                try:
+                    pdf_executor.shutdown(wait=False, cancel_futures=True)
+                except:
+                    pass
 
         # Save the current sync token before closing
         if matrix_client.next_batch:

@@ -126,6 +126,20 @@ class JobQueue:
                 logger.error(f"❌ Failed to add job: {e}")
                 return False
 
+    def has_pending_jobs(self) -> bool:
+        """Check if there are any pending jobs without locking for update."""
+        with self._lock:
+            try:
+                with self._get_connection() as conn:
+                    cursor = conn.execute(
+                        "SELECT 1 FROM jobs WHERE status = ? LIMIT 1",
+                        (JobStatus.PENDING.value,),
+                    )
+                    return cursor.fetchone() is not None
+            except sqlite3.Error as e:
+                logger.error(f"❌ Failed to check pending jobs: {e}")
+                return False
+
     def get_next_job(self) -> Optional[Job]:
         """Get the next pending job, mark it as processing."""
         with self._lock:
