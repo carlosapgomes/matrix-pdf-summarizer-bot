@@ -211,35 +211,69 @@ def load_prompt(prompt_file_path: str) -> str:
 
 def process_pdf_sync(file_bytes: bytes, filename: str) -> str:
     """Synchronous PDF processing for thread pool execution."""
-    import asyncio
+    import threading
+    import requests
+    import json
     
-    # This runs in a separate thread, so we need a new event loop
+    thread_id = threading.current_thread().name
+    logger.info(f"🧵 [{thread_id}] Processing {filename} in thread pool")
+    
+    text = extract_pdf_text(file_bytes)
+    logger.info(f"📄 [{thread_id}] Extracted {len(text)} characters from PDF")
+
+    if not text:
+        logger.warning(f"⚠️ [{thread_id}] No text extracted from {filename}")
+        return "❌ Não foi possível extrair texto do PDF."
+
+    # Remove watermark sequences
+    cleaned_text = remove_watermark(text)
+
+    # Load instructions from external prompt file
+    instructions = load_prompt(PROMPT_FILE)
+
+    logger.info(f"🤖 [{thread_id}] Sending to LLM for summarization...")
+    
+    # Use synchronous HTTP request instead of async client
     try:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
+        # Build API call parameters
+        api_params = {
+            "model": LLM_MODEL,
+            "messages": [
+                {"role": "system", "content": instructions},
+                {"role": "user", "content": cleaned_text},
+            ],
+        }
         
-        text = extract_pdf_text(file_bytes)
-        logger.info(f"📄 Extracted {len(text)} characters from PDF")
-
-        if not text:
-            logger.warning(f"⚠️ No text extracted from {filename}")
-            return "❌ Não foi possível extrair texto do PDF."
-
-        # Remove watermark sequences
-        cleaned_text = remove_watermark(text)
-
-        # Load instructions from external prompt file
-        instructions = load_prompt(PROMPT_FILE)
-
-        logger.info("🤖 Sending to LLM for summarization...")
+        # Add optional parameters if configured
+        if LLM_TEMPERATURE is not None:
+            api_params["temperature"] = LLM_TEMPERATURE
+        if LLM_MAX_TOKENS is not None:
+            api_params["max_tokens"] = LLM_MAX_TOKENS
         
-        # Run the async LLM call in this thread's event loop
-        summary = loop.run_until_complete(summarize_text(cleaned_text, instructions))
-        logger.info(f"✅ Summary generated ({len(summary)} characters)")
-
+        # Use requests for synchronous HTTP call
+        headers = {
+            "Authorization": f"Bearer {OPENAI_API_KEY}",
+            "Content-Type": "application/json"
+        }
+        
+        base_url = LLM_BASE_URL or "https://api.openai.com/v1"
+        response = requests.post(
+            f"{base_url}/chat/completions",
+            headers=headers,
+            json=api_params,
+            timeout=300  # 5 minute timeout
+        )
+        response.raise_for_status()
+        
+        result = response.json()
+        summary = result["choices"][0]["message"]["content"].strip()
+        
+        logger.info(f"✅ [{thread_id}] Summary generated ({len(summary)} characters)")
         return summary
-    finally:
-        loop.close()
+        
+    except Exception as e:
+        logger.error(f"❌ [{thread_id}] Error calling LLM API: {e}")
+        return f"❌ Erro na geração do sumário: {str(e)[:100]}"
 
 
 async def process_pdf(file_bytes: bytes, filename: str) -> str:
@@ -254,10 +288,18 @@ async def process_pdf(file_bytes: bytes, filename: str) -> str:
         )
         logger.info(f"🧵 Created thread pool with {_max_workers} workers (lazy init)")
     
+    logger.info(f"🚀 Submitting {filename} to thread pool for processing")
     loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(
-        thread_pool_executor, process_pdf_sync, file_bytes, filename
-    )
+    
+    try:
+        result = await loop.run_in_executor(
+            thread_pool_executor, process_pdf_sync, file_bytes, filename
+        )
+        logger.info(f"✅ Thread pool processing completed for {filename}")
+        return result
+    except Exception as e:
+        logger.error(f"❌ Thread pool processing failed for {filename}: {e}")
+        raise
 
 
 
