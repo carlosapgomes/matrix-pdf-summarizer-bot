@@ -8,7 +8,9 @@ A Matrix bot that automatically detects PDF uploads in a room, extracts their te
 - 📄 Extracts text from PDF documents
 - 🧹 Removes repeating watermark sequences
 - 🧠 Generates concise summaries using configurable LLM (defaults to GPT-5-mini)
-- 🔧 Supports OpenAI-compatible APIs (Ollama, LM Studio, Azure OpenAI, etc.)
+- 🔄 **Dual LLM processing** - Compare analyses from two different LLMs simultaneously
+- 🌐 **Multi-provider support** - OpenAI, Anthropic Claude, Azure OpenAI, Ollama, and generic APIs
+- 🔧 Supports OpenAI-compatible APIs (Ollama, LM Studio, etc.)
 - 💬 Replies to the original PDF message with the summary (threaded)
 - 💾 Persists sync tokens to avoid reprocessing messages after restarts
 - 🛡️ Clean shutdown handling with state preservation
@@ -16,7 +18,7 @@ A Matrix bot that automatically detects PDF uploads in a room, extracts their te
 ## Requirements
 
 - Python 3.12+
-- OpenAI API key
+- At least one LLM API key (OpenAI, Anthropic, etc.)
 - Matrix account and homeserver access
 - `uv` package manager (recommended)
 
@@ -48,16 +50,37 @@ cp .env.example .env
 ```
 
 4. Edit `.env` with your credentials:
-   - `MATRIX_HOMESERVER`: Your Matrix homeserver URL
-   - `MATRIX_USER`: Your bot's Matrix user ID
-   - `MATRIX_PASSWORD`: Your bot's password
-   - `MATRIX_ROOM_ID`: The room ID to monitor (without server suffix)
-   - `OPENAI_API_KEY`: Your OpenAI API key
-   - `LLM_MODEL`: AI model to use (defaults to `gpt-5-mini`)
-   - `LLM_BASE_URL`: (Optional) Custom API endpoint for OpenAI-compatible APIs
-   - `LLM_TEMPERATURE`: (Optional) Response creativity (0.0-2.0)
-   - `LLM_MAX_TOKENS`: (Optional) Maximum response length
-   - `PROMPT_FILE`: Path to prompt file (defaults to `prompts/medical_triage.txt`)
+
+### Matrix Configuration
+- `MATRIX_HOMESERVER`: Your Matrix homeserver URL
+- `MATRIX_USER`: Your bot's Matrix user ID
+- `MATRIX_PASSWORD`: Your bot's password
+- `MATRIX_ROOM_ID`: The room ID to monitor (without server suffix)
+
+### Default LLM Configuration
+- `DEFAULT_LLM_PROVIDER`: LLM provider (`openai`, `anthropic`, `azure`, `generic`)
+- `DEFAULT_LLM_API_KEY`: API key for your chosen provider
+- `DEFAULT_LLM_MODEL`: AI model to use (e.g., `gpt-5-mini`, `claude-3-5-sonnet`)
+- `DEFAULT_LLM_BASE_URL`: (Optional) Custom API endpoint for OpenAI-compatible APIs
+- `DEFAULT_LLM_PROMPT`: Path to prompt file (defaults to `prompts/medical_triage.txt`)
+
+### Dual LLM Configuration (Optional)
+- `DUAL_LLM_ENABLED`: Set to `true` to enable dual processing
+- `SECONDARY_LLM_PROVIDER`: Second LLM provider for comparison
+- `SECONDARY_LLM_API_KEY`: API key for secondary LLM
+- `SECONDARY_LLM_MODEL`: Model for secondary analysis
+- `SECONDARY_LLM_BASE_URL`: (Optional) Custom endpoint for secondary LLM
+- `SECONDARY_LLM_PROMPT`: Path to secondary prompt file
+
+### Common Parameters
+- `LLM_TEMPERATURE`: (Optional) Response creativity (0.0-2.0)
+- `LLM_MAX_TOKENS`: (Optional) Maximum response length
+
+### Backward Compatibility (Deprecated)
+- `OPENAI_API_KEY`: Falls back to `DEFAULT_LLM_API_KEY`
+- `LLM_MODEL`: Falls back to `DEFAULT_LLM_MODEL`
+- `LLM_BASE_URL`: Falls back to `DEFAULT_LLM_BASE_URL`
+- `PROMPT_FILE`: Falls back to `DEFAULT_LLM_PROMPT`
 
 ## Running the Bot
 
@@ -86,11 +109,20 @@ The bot will:
 
 Simply upload a PDF file to the monitored Matrix room. The bot will:
 
+### Single LLM Mode (Default)
 1. Reply with "🧠 Processing `filename.pdf`..."
 2. Download and extract text from the PDF
 3. Remove any repeating watermarks
-4. Generate a summary using AI
-5. Reply with "📘 **Summary of `filename.pdf`:**" followed by the summary
+4. Generate a summary using your configured LLM
+5. Reply with the analysis
+
+### Dual LLM Mode (When Enabled)
+1. Reply with "🧠 Processing `filename.pdf`..."
+2. Download and extract text from the PDF
+3. Remove any repeating watermarks
+4. Concurrently generate analyses using both configured LLMs
+5. Reply with "🤖 **Análise Primária**" followed by primary analysis
+6. Reply with "🔍 **Análise Secundária**" followed by secondary analysis
 
 All responses are threaded as replies to the original PDF upload message.
 
@@ -139,13 +171,28 @@ nano .env
 Configure with your local Matrix server:
 
 ```bash
+# Matrix Configuration
 MATRIX_HOMESERVER=http://localhost:8008  # or your Matrix server port
 MATRIX_USER=@pdfbot:yourdomain.com
 MATRIX_PASSWORD=your_bot_password
 MATRIX_ROOM_ID=!yourroom:yourdomain.com
-OPENAI_API_KEY=your_openai_key
-LLM_MODEL=gpt-5-mini
-# LLM_BASE_URL=http://localhost:11434/v1  # Optional: for local Ollama
+
+# Default LLM Configuration
+DEFAULT_LLM_PROVIDER=openai
+DEFAULT_LLM_MODEL=gpt-5-mini
+DEFAULT_LLM_API_KEY=your_openai_key
+
+# Optional: Enable dual LLM for model comparison
+# DUAL_LLM_ENABLED=true
+# SECONDARY_LLM_PROVIDER=anthropic
+# SECONDARY_LLM_MODEL=claude-3-5-sonnet-20241022
+# SECONDARY_LLM_API_KEY=your_anthropic_key
+# SECONDARY_LLM_PROMPT=prompts/medical_triage_secondary.txt
+
+# Optional: Use local Ollama
+# DEFAULT_LLM_PROVIDER=generic
+# DEFAULT_LLM_BASE_URL=http://localhost:11434/v1
+# DEFAULT_LLM_API_KEY=not_required
 ```
 
 ### 4. Create systemd service with resource limits
@@ -276,27 +323,77 @@ The default prompt is configured for medical report triage in Brazilian Portugue
 
 ### Using Different LLM Providers
 
-The bot supports any OpenAI-compatible API. Examples:
+The bot supports multiple LLM providers. Examples:
+
+#### Single LLM Configuration Examples
+
+**OpenAI (Default):**
+```bash
+DEFAULT_LLM_PROVIDER=openai
+DEFAULT_LLM_MODEL=gpt-5-mini
+DEFAULT_LLM_API_KEY=sk-your_openai_key_here
+# DEFAULT_LLM_BASE_URL not needed (uses default endpoint)
+```
+
+**Anthropic Claude:**
+```bash
+DEFAULT_LLM_PROVIDER=anthropic
+DEFAULT_LLM_MODEL=claude-3-5-sonnet-20241022
+DEFAULT_LLM_API_KEY=sk-ant-your_anthropic_key_here
+```
 
 **Local LLM with Ollama:**
-
 ```bash
-LLM_MODEL=llama3.2
-LLM_BASE_URL=http://localhost:11434/v1
+DEFAULT_LLM_PROVIDER=generic
+DEFAULT_LLM_MODEL=llama3.1:8b
+DEFAULT_LLM_BASE_URL=http://localhost:11434/v1
+DEFAULT_LLM_API_KEY=not_required
 ```
 
 **Azure OpenAI:**
-
 ```bash
-LLM_MODEL=gpt-4
-LLM_BASE_URL=https://your-resource.openai.azure.com/openai/deployments/your-deployment
+DEFAULT_LLM_PROVIDER=azure
+DEFAULT_LLM_MODEL=your-deployment-name
+DEFAULT_LLM_BASE_URL=https://your-resource.openai.azure.com/
+DEFAULT_LLM_API_KEY=your_azure_api_key
 ```
 
-**LM Studio:**
+#### Dual LLM Configuration Examples
 
+**OpenAI + Anthropic:**
 ```bash
-LLM_MODEL=local-model
-LLM_BASE_URL=http://localhost:1234/v1
+# Primary LLM
+DEFAULT_LLM_PROVIDER=openai
+DEFAULT_LLM_MODEL=gpt-5-mini
+DEFAULT_LLM_API_KEY=sk-your_openai_key_here
+DEFAULT_LLM_PROMPT=prompts/medical_triage_primary.txt
+
+# Enable dual mode
+DUAL_LLM_ENABLED=true
+
+# Secondary LLM
+SECONDARY_LLM_PROVIDER=anthropic
+SECONDARY_LLM_MODEL=claude-3-5-sonnet-20241022
+SECONDARY_LLM_API_KEY=sk-ant-your_anthropic_key_here
+SECONDARY_LLM_PROMPT=prompts/medical_triage_secondary.txt
+```
+
+**Cloud + Local (Cost Optimization):**
+```bash
+# Primary LLM (Cloud)
+DEFAULT_LLM_PROVIDER=openai
+DEFAULT_LLM_MODEL=gpt-5-mini
+DEFAULT_LLM_API_KEY=sk-your_openai_key_here
+
+# Enable dual mode
+DUAL_LLM_ENABLED=true
+
+# Secondary LLM (Local)
+SECONDARY_LLM_PROVIDER=generic
+SECONDARY_LLM_MODEL=qwen2.5:7b
+SECONDARY_LLM_BASE_URL=http://localhost:11434/v1
+SECONDARY_LLM_API_KEY=not_required
+SECONDARY_LLM_PROMPT=prompts/medical_triage_experimental.txt
 ```
 
 ## Acknowledgments

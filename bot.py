@@ -3,7 +3,7 @@ import json
 import logging
 import os
 from concurrent.futures import ThreadPoolExecutor
-from openai import AsyncOpenAI
+
 from nio import (
     AsyncClient,
     MatrixRoom,
@@ -16,7 +16,8 @@ from nio import (
 from dotenv import load_dotenv
 from user_interactions import dm_callback, mention_callback, invite_callback
 from job_queue import JobQueue, Job
-from pdf_processor import process_pdf_async
+from pdf_processor import process_pdf_dual_async
+from llm_factory import LLMClientFactory
 
 # -------------------------------------------------------------------
 # Load environment variables
@@ -27,13 +28,24 @@ MATRIX_HOMESERVER = os.getenv("MATRIX_HOMESERVER")
 MATRIX_USER = os.getenv("MATRIX_USER")
 MATRIX_PASSWORD = os.getenv("MATRIX_PASSWORD")
 MATRIX_ROOM_ID = os.getenv("MATRIX_ROOM_ID")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 SESSION_FILE = os.getenv("SESSION_FILE", "session.json")
-PROMPT_FILE = os.getenv("PROMPT_FILE", "prompts/medical_triage.txt")
 
-# LLM Configuration
-LLM_MODEL = os.getenv("LLM_MODEL", "gpt-5-mini")
-LLM_BASE_URL = os.getenv("LLM_BASE_URL", None)  # Optional: for OpenAI-compatible APIs
+# Default LLM Configuration
+DEFAULT_LLM_PROVIDER = os.getenv("DEFAULT_LLM_PROVIDER", "openai")
+DEFAULT_LLM_MODEL = os.getenv("DEFAULT_LLM_MODEL", os.getenv("LLM_MODEL", "gpt-5-mini"))
+DEFAULT_LLM_BASE_URL = os.getenv("DEFAULT_LLM_BASE_URL", os.getenv("LLM_BASE_URL"))
+DEFAULT_LLM_API_KEY = os.getenv("DEFAULT_LLM_API_KEY", os.getenv("OPENAI_API_KEY"))
+DEFAULT_LLM_PROMPT = os.getenv("DEFAULT_LLM_PROMPT", os.getenv("PROMPT_FILE", "prompts/medical_triage.txt"))
+
+# Dual LLM Configuration
+DUAL_LLM_ENABLED = os.getenv("DUAL_LLM_ENABLED", "false").lower() == "true"
+SECONDARY_LLM_PROVIDER = os.getenv("SECONDARY_LLM_PROVIDER")
+SECONDARY_LLM_MODEL = os.getenv("SECONDARY_LLM_MODEL")
+SECONDARY_LLM_BASE_URL = os.getenv("SECONDARY_LLM_BASE_URL")
+SECONDARY_LLM_API_KEY = os.getenv("SECONDARY_LLM_API_KEY")
+SECONDARY_LLM_PROMPT = os.getenv("SECONDARY_LLM_PROMPT")
+
+# Common LLM Parameters
 LLM_TEMPERATURE = (
     float(os.getenv("LLM_TEMPERATURE")) if os.getenv("LLM_TEMPERATURE") else None
 )
@@ -65,21 +77,113 @@ matrix_client: AsyncClient | None = None
 job_queue: JobQueue | None = None
 pdf_executor: ThreadPoolExecutor | None = None
 
-# Initialize OpenAI client with optional base_url for compatible APIs
-llm_client_kwargs = {"api_key": OPENAI_API_KEY}
-if LLM_BASE_URL:
-    llm_client_kwargs["base_url"] = LLM_BASE_URL
-llm_client = AsyncOpenAI(**llm_client_kwargs)
-
-# LLM configuration for PDF processor
-llm_config = {
-    "model": LLM_MODEL,
+# Default LLM configuration
+default_llm_config = {
+    "provider": DEFAULT_LLM_PROVIDER,
+    "api_key": DEFAULT_LLM_API_KEY,
+    "model": DEFAULT_LLM_MODEL,
+    "base_url": DEFAULT_LLM_BASE_URL,
+    "prompt_file": DEFAULT_LLM_PROMPT,
     "temperature": LLM_TEMPERATURE,
     "max_tokens": LLM_MAX_TOKENS,
 }
 
+# Secondary LLM configuration (when dual enabled)
+secondary_llm_config = None
+if DUAL_LLM_ENABLED:
+    secondary_llm_config = {
+        "provider": SECONDARY_LLM_PROVIDER,
+        "api_key": SECONDARY_LLM_API_KEY,
+        "model": SECONDARY_LLM_MODEL,
+        "base_url": SECONDARY_LLM_BASE_URL,
+        "prompt_file": SECONDARY_LLM_PROMPT,
+        "temperature": LLM_TEMPERATURE,
+        "max_tokens": LLM_MAX_TOKENS,
+    }
+
+# Initialize LLM clients (will be set after configuration validation)
+default_llm_client = None
+secondary_llm_client = None
+
 # In-memory storage for job file data (since SQLite doesn't store blobs efficiently)
 job_file_data = {}
+
+
+# -------------------------------------------------------------------
+# Configuration validation and LLM client initialization
+# -------------------------------------------------------------------
+def validate_configuration():
+    """Validate LLM configuration at startup."""
+    errors = []
+
+    # Validate default LLM config
+    if not DEFAULT_LLM_API_KEY:
+        errors.append("DEFAULT_LLM_API_KEY is required")
+    if not DEFAULT_LLM_MODEL:
+        errors.append("DEFAULT_LLM_MODEL is required")
+    if not os.path.exists(DEFAULT_LLM_PROMPT):
+        errors.append(f"Default prompt file not found: {DEFAULT_LLM_PROMPT}")
+
+    # Validate dual LLM config (if enabled)
+    if DUAL_LLM_ENABLED:
+        if not SECONDARY_LLM_API_KEY:
+            errors.append("SECONDARY_LLM_API_KEY required when DUAL_LLM_ENABLED=true")
+        if not SECONDARY_LLM_MODEL:
+            errors.append("SECONDARY_LLM_MODEL required when DUAL_LLM_ENABLED=true")
+        if not SECONDARY_LLM_PROVIDER:
+            errors.append("SECONDARY_LLM_PROVIDER required when DUAL_LLM_ENABLED=true")
+        if not SECONDARY_LLM_PROMPT:
+            errors.append("SECONDARY_LLM_PROMPT required when DUAL_LLM_ENABLED=true")
+        elif not os.path.exists(SECONDARY_LLM_PROMPT):
+            errors.append(f"Secondary prompt file not found: {SECONDARY_LLM_PROMPT}")
+
+    # Validate providers
+    if not LLMClientFactory.validate_provider(DEFAULT_LLM_PROVIDER):
+        errors.append(f"Unsupported primary LLM provider: {DEFAULT_LLM_PROVIDER}")
+
+    if DUAL_LLM_ENABLED and SECONDARY_LLM_PROVIDER and not LLMClientFactory.validate_provider(SECONDARY_LLM_PROVIDER):
+        errors.append(f"Unsupported secondary LLM provider: {SECONDARY_LLM_PROVIDER}")
+
+    # Validate base_url requirements for providers that need it
+    primary_provider = DEFAULT_LLM_PROVIDER.lower()
+    if primary_provider in ("azure", "generic") and not DEFAULT_LLM_BASE_URL:
+        errors.append(f"DEFAULT_LLM_BASE_URL is required for provider {DEFAULT_LLM_PROVIDER}")
+
+    if DUAL_LLM_ENABLED and SECONDARY_LLM_PROVIDER:
+        secondary_provider = SECONDARY_LLM_PROVIDER.lower()
+        if secondary_provider in ("azure", "generic") and not SECONDARY_LLM_BASE_URL:
+            errors.append(f"SECONDARY_LLM_BASE_URL is required for provider {SECONDARY_LLM_PROVIDER}")
+
+    if errors:
+        for error in errors:
+            logger.error(f"❌ Configuration error: {error}")
+        raise SystemExit(1)
+
+    logger.info("✅ Configuration validation passed")
+    if DUAL_LLM_ENABLED:
+        logger.info(f"🔄 Dual LLM mode enabled: {DEFAULT_LLM_PROVIDER}/{DEFAULT_LLM_MODEL} + {SECONDARY_LLM_PROVIDER}/{SECONDARY_LLM_MODEL}")
+    else:
+        logger.info(f"🤖 Single LLM mode: {DEFAULT_LLM_PROVIDER}/{DEFAULT_LLM_MODEL}")
+
+
+def initialize_llm_clients():
+    """Initialize LLM clients after configuration validation."""
+    global default_llm_client, secondary_llm_client
+
+    # Create default LLM client
+    default_llm_client = LLMClientFactory.create_client(
+        provider=default_llm_config["provider"],
+        api_key=default_llm_config["api_key"],
+        base_url=default_llm_config["base_url"]
+    )
+
+    # Create secondary LLM client (if dual enabled)
+    if DUAL_LLM_ENABLED and secondary_llm_config:
+        secondary_llm_client = LLMClientFactory.create_client(
+            provider=secondary_llm_config["provider"],
+            api_key=secondary_llm_config["api_key"],
+            base_url=secondary_llm_config["base_url"]
+        )
 
 
 # -------------------------------------------------------------------
@@ -168,13 +272,17 @@ async def process_jobs_background():
                 job.file_data = file_data
 
                 try:
-                    # Process PDF using thread pool
-                    summary = await process_pdf_async(
-                        job, PROMPT_FILE, llm_client, llm_config
+                    # Process PDF using new dual function
+                    results = await process_pdf_dual_async(
+                        job,
+                        default_llm_config,
+                        default_llm_client,
+                        secondary_llm_config if DUAL_LLM_ENABLED else None,
+                        secondary_llm_client if DUAL_LLM_ENABLED else None
                     )
 
                     # Mark job as completed
-                    job_queue.complete_job(job.id, summary)
+                    job_queue.complete_job(job.id, results)
 
                     # Clean up file data from memory
                     if job.id in job_file_data:
@@ -240,17 +348,66 @@ async def send_results_background():
 
 
 async def send_job_result(job: Job):
-    """Send the job result back to the Matrix room."""
-    await matrix_client.room_send(
-        room_id=job.room_id,
-        message_type="m.room.message",
-        content={
-            "msgtype": "m.text",
-            "body": f"{job.result}",
-            "m.relates_to": {"m.in_reply_to": {"event_id": job.event_id}},
-        },
-    )
-    logger.info(f"✅ Summary for {job.filename} sent to Matrix room")
+    """Send job results - single or dual based on configuration."""
+    results = job.result
+    
+    try:
+        if isinstance(results, dict) and "primary" in results:
+            # Dict-based results (single or dual LLM)
+            has_secondary = "secondary" in results
+            logger.info(f"📤 Sending {'dual' if has_secondary else 'single'} results for {job.filename}")
+            
+            # Send primary analysis
+            if "primary" in results:
+                await matrix_client.room_send(
+                    room_id=job.room_id,
+                    message_type="m.room.message",
+                    content={
+                        "msgtype": "m.text",
+                        "body": f"🤖 **Análise Primária**\n\n{results['primary']}",
+                        "format": "org.matrix.custom.html",
+                        "formatted_body": f"🤖 <strong>Análise Primária</strong><br/><br/>{results['primary'].replace(chr(10), '<br/>')}",
+                        "m.relates_to": {"m.in_reply_to": {"event_id": job.event_id}},
+                    },
+                )
+                logger.info(f"✅ Primary analysis sent for {job.filename}")
+            
+            # Small delay between messages
+            await asyncio.sleep(0.5)
+            
+            # Send secondary analysis
+            if "secondary" in results:
+                await matrix_client.room_send(
+                    room_id=job.room_id,
+                    message_type="m.room.message",
+                    content={
+                        "msgtype": "m.text",
+                        "body": f"🔍 **Análise Secundária**\n\n{results['secondary']}",
+                        "format": "org.matrix.custom.html",
+                        "formatted_body": f"🔍 <strong>Análise Secundária</strong><br/><br/>{results['secondary'].replace(chr(10), '<br/>')}",
+                        "m.relates_to": {"m.in_reply_to": {"event_id": job.event_id}},
+                    },
+                )
+                logger.info(f"✅ Secondary analysis sent for {job.filename}")
+            
+        else:
+            # Single result or legacy format
+            result_text = results.get("primary", results) if isinstance(results, dict) else results
+            
+            await matrix_client.room_send(
+                room_id=job.room_id,
+                message_type="m.room.message",
+                content={
+                    "msgtype": "m.text",
+                    "body": f"{result_text}",
+                    "m.relates_to": {"m.in_reply_to": {"event_id": job.event_id}},
+                },
+            )
+            logger.info(f"✅ Single analysis sent for {job.filename}")
+    
+    except Exception as e:
+        logger.error(f"❌ Error sending result for {job.filename}: {e}")
+        raise
 
 
 async def send_job_failure(job: Job):
@@ -277,7 +434,6 @@ async def cleanup_jobs_periodic():
                 logger.info(f"🧹 Cleaned up {deleted_count} old jobs")
             
             # Also cleanup orphaned file data that might be left in memory
-            current_job_ids = set()
             try:
                 stats = job_queue.get_queue_stats()
                 # If we have more file data than active jobs, clean up
@@ -393,6 +549,10 @@ async def main():
     logger.info(f"👤 User: {MATRIX_USER}")
     logger.info(f"📍 Room ID: {MATRIX_ROOM_ID}")
     logger.info(f"⚙️ Max worker threads: {MAX_WORKER_THREADS}")
+
+    # Validate configuration and initialize LLM clients
+    validate_configuration()
+    initialize_llm_clients()
 
     # Initialize job queue
     job_queue = JobQueue(db_path=JOB_DB_PATH, max_retries=MAX_JOB_RETRIES)
@@ -510,7 +670,7 @@ async def main():
                 # Force shutdown if normal shutdown fails
                 try:
                     pdf_executor.shutdown(wait=False, cancel_futures=True)
-                except:
+                except Exception:
                     pass
 
         # Save the current sync token before closing
