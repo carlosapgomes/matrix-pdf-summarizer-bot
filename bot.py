@@ -281,8 +281,8 @@ async def process_jobs_background():
                         secondary_llm_client if DUAL_LLM_ENABLED else None
                     )
 
-                    # Mark job as completed
-                    job_queue.complete_job(job.id, results)
+                    # Mark job as completed (serialize dict to JSON)
+                    job_queue.complete_job(job.id, json.dumps(results))
 
                     # Clean up file data from memory
                     if job.id in job_file_data:
@@ -349,7 +349,15 @@ async def send_results_background():
 
 async def send_job_result(job: Job):
     """Send job results - single or dual based on configuration."""
-    results = job.result
+    # Deserialize JSON result back to dict if needed
+    if isinstance(job.result, str):
+        try:
+            results = json.loads(job.result)
+        except json.JSONDecodeError:
+            # Fallback for legacy string results
+            results = job.result
+    else:
+        results = job.result
     
     try:
         if isinstance(results, dict) and "primary" in results:
