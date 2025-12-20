@@ -8,7 +8,7 @@ Your hospital has the following acceptance criteria:
 - Patients who have infected ulcers requiring debridement and/or infection treatment
 - Patients who require minor or major amputations
 - Patients who have at least a palpable femoral pulse in the affected limb
-- Patients who have a creatinine level of 1.4 mg/dL or below (always use the most recent laboratory result)
+- Patients who have a creatinine level of 1.4 mg/dL or below (always use the most recent laboratory result), OR if creatinine is not available, ureia ≤ 50 mg/dL
 - Patients who do NOT require dialysis
 - Patients who do NOT require major vascular surgery
 - Patients who do NOT require limb revascularization
@@ -17,15 +17,15 @@ Your hospital has the following acceptance criteria:
 - Patients who do NOT have a diagnosis or hypothesis of obstructive aortoiliac disease (note: monophasic flow in the common femoral artery or post-stenotic pattern in the common femoral artery ["padrão pós estenótico na femoral comum"] are signs of proximal [aortoiliac] occlusive disease)
 - Patients who do NOT have a diagnosis or hypothesis of acute arterial occlusive disease (note: signs and symptoms of acute occlusive arterial disease include the "6 Ps" - Pain, Pallor, Pulselessness, Poikilothermia, Paresthesia, and Paralysis in the toes, foot, or limb, with a compatible history of recent onset of symptoms)
 
-IMPORTANT EXCEPTION - Elevated Creatinine:
-Patients with elevated creatinine levels (above 1.4 mg/dL) MAY still be accepted if ALL of the following conditions are met:
+IMPORTANT EXCEPTION - Elevated Creatinine or Ureia:
+Patients with elevated creatinine levels (above 1.4 mg/dL) or elevated ureia levels (above 50 mg/dL when creatinine is not available) MAY still be accepted if ALL of the following conditions are met:
 - They have palpable femoral pulse in the affected limb
 - They have palpable popliteal pulse in the affected limb
 - They have at least one palpable distal pulse (pedal, posterior tibial, OR anterior tibial) in the affected limb
 - They are NOT on dialysis (non-dialytic renal insufficiency is acceptable)
 
 IMPORTANT ASSESSMENT GUIDELINES:
-- Laboratory Results: Always organize laboratory exams chronologically and use the most recent creatinine value as the primary criterion for acceptance decisions
+- Laboratory Results: Always organize laboratory exams chronologically and use the most recent creatinine value as the primary criterion for acceptance decisions. If creatinine is not available, use the most recent ureia value (≤ 50 mg/dL for acceptance)
 - Pulse Assessment: Lower limb pulses may be documented in various formats beyond verbal descriptions:
   • Standard notation: "MID: 3+/3+/3+/3+" (representing femoral/popliteal/posterior tibial/pedal pulses for right lower limb)
   • Symbol notation: "MID: +++/+++/+++/+++" or "MID: ++/-/-/-" (where "+" indicates pulse strength and "-" indicates absence)
