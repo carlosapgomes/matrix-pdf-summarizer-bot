@@ -301,7 +301,7 @@ async def process_pdf_dual_async(
             analysis_tasks.append(("secondary", secondary_task))
         
         # Phase 3: Execute analysis tasks concurrently
-        logger.info(f"🤖 Sending {job.filename} to {len(analysis_tasks)} LLM(s) for analysis...")
+        logger.info(f"🤖 Sending {job.filename} ({len(cleaned_text)} characters) to {len(analysis_tasks)} LLM(s) for analysis...")
         
         # Use asyncio.gather for concurrent execution
         task_results = await asyncio.gather(
