@@ -56,3 +56,4 @@ htmlcov/
 
 # mypy
 .mypy_cache/
+jobs.db
