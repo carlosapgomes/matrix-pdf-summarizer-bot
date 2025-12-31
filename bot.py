@@ -77,6 +77,9 @@ matrix_client: AsyncClient | None = None
 job_queue: JobQueue | None = None
 pdf_executor: ThreadPoolExecutor | None = None
 
+# Worker pool for concurrent processing
+worker_tasks: list = []
+
 # Default LLM configuration
 default_llm_config = {
     "provider": DEFAULT_LLM_PROVIDER,
@@ -241,73 +244,64 @@ async def login_if_needed(client: AsyncClient):
 # -------------------------------------------------------------------
 # Background job processing
 # -------------------------------------------------------------------
-async def process_jobs_background():
-    """Background task that processes pending jobs."""
-    consecutive_empty_polls = 0
-    max_empty_polls = 10  # Increase sleep time after multiple empty polls
+async def pdf_worker(worker_id: int):
+    """Worker that processes jobs from the queue concurrently."""
+    logger.info(f"👷 Worker {worker_id} started")
     
-    logger.info("🔄 Job processor started")
     while True:
         try:
-            # Quick check for pending jobs before expensive get_next_job call
+            # Check for pending jobs
             if not job_queue.has_pending_jobs():
-                consecutive_empty_polls += 1
-                if consecutive_empty_polls >= max_empty_polls:
-                    await asyncio.sleep(10)
-                else:
-                    await asyncio.sleep(2)
+                await asyncio.sleep(2)  # Wait when no jobs available
                 continue
                 
             job = job_queue.get_next_job()
-            if job:
-                consecutive_empty_polls = 0  # Reset counter when we find work
+            if not job:
+                await asyncio.sleep(2)  # Brief wait if no job returned
+                continue
                 
-                # Get file data from memory
-                file_data = job_file_data.get(job.id)
-                if file_data is None:
-                    logger.error(f"❌ File data not found for job {job.id}")
-                    job_queue.fail_job(job.id, "File data not found")
-                    continue
+            logger.info(f"👷 Worker {worker_id} processing job {job.id}: {job.filename}")
+            
+            # Get file data from memory
+            file_data = job_file_data.get(job.id)
+            if file_data is None:
+                logger.error(f"❌ Worker {worker_id}: File data not found for job {job.id}")
+                job_queue.fail_job(job.id, "File data not found")
+                continue
 
-                job.file_data = file_data
+            job.file_data = file_data
 
-                try:
-                    # Process PDF using new dual function
-                    results = await process_pdf_dual_async(
-                        job,
-                        default_llm_config,
-                        default_llm_client,
-                        secondary_llm_config if DUAL_LLM_ENABLED else None,
-                        secondary_llm_client if DUAL_LLM_ENABLED else None
-                    )
+            try:
+                # Process PDF using existing dual function
+                results = await process_pdf_dual_async(
+                    job,
+                    default_llm_config,
+                    default_llm_client,
+                    secondary_llm_config if DUAL_LLM_ENABLED else None,
+                    secondary_llm_client if DUAL_LLM_ENABLED else None
+                )
 
-                    # Mark job as completed (serialize dict to JSON)
-                    job_queue.complete_job(job.id, json.dumps(results))
+                # Mark job as completed (serialize dict to JSON)
+                job_queue.complete_job(job.id, json.dumps(results))
 
-                    # Clean up file data from memory
-                    if job.id in job_file_data:
-                        del job_file_data[job.id]
+                # Clean up file data from memory
+                if job.id in job_file_data:
+                    del job_file_data[job.id]
+                    
+                logger.info(f"✅ Worker {worker_id} completed job {job.id}")
 
-                except Exception as e:
-                    logger.error(f"❌ Error processing job {job.id}: {e}")
-                    job_queue.fail_job(job.id, str(e))
+            except Exception as e:
+                logger.error(f"❌ Worker {worker_id} error processing job {job.id}: {e}")
+                job_queue.fail_job(job.id, str(e))
 
-                    # Clean up file data on failure too
-                    if job.id in job_file_data:
-                        del job_file_data[job.id]
-            else:
-                # No jobs to process - implement adaptive sleep
-                consecutive_empty_polls += 1
-                if consecutive_empty_polls >= max_empty_polls:
-                    # After many empty polls, sleep longer to reduce CPU usage
-                    await asyncio.sleep(10)
-                else:
-                    await asyncio.sleep(2)  # Increased from 1 to 2 seconds
-
+                # Clean up file data on failure too
+                if job.id in job_file_data:
+                    del job_file_data[job.id]
+                    
         except Exception as e:
-            logger.error(f"❌ Error in job processor: {e}")
-            consecutive_empty_polls = 0
-            await asyncio.sleep(10)  # Wait longer on error
+            logger.error(f"❌ Worker {worker_id} unexpected error: {e}")
+            await asyncio.sleep(5)  # Wait longer on unexpected errors
+
 
 
 async def send_results_background():
@@ -603,8 +597,14 @@ async def main():
     # Start background tasks with exception handling
     logger.info("🔄 Starting background tasks...")
     
-    # Start background tasks directly (they have their own exception handling)
-    job_processor_task = asyncio.create_task(process_jobs_background())
+    # Spawn worker pool for concurrent PDF processing
+    global worker_tasks
+    num_workers = MAX_WORKER_THREADS
+    worker_tasks = [
+        asyncio.create_task(pdf_worker(i))
+        for i in range(num_workers)
+    ]
+    logger.info(f"👷 Spawned {num_workers} PDF processing workers")
     result_sender_task = asyncio.create_task(send_results_background())
     cleanup_task = asyncio.create_task(cleanup_jobs_periodic())
 
@@ -616,8 +616,12 @@ async def main():
         while True:
             await asyncio.sleep(60)  # Check every minute
             
+            # Check worker health
+            active_workers = sum(1 for worker in worker_tasks if not worker.done())
+            if active_workers < len(worker_tasks):
+                logger.error(f"❌ {len(worker_tasks) - active_workers}/{len(worker_tasks)} PDF workers have stopped!")
+            
             tasks_status = {
-                "job_processor": not job_processor_task.done(),
                 "result_sender": not result_sender_task.done(), 
                 "cleanup": not cleanup_task.done()
             }
@@ -648,7 +652,12 @@ async def main():
     finally:
         # Cancel background tasks
         logger.info("⏹️ Stopping background tasks...")
-        job_processor_task.cancel()
+        
+        # Cancel worker pool
+        logger.info(f"🛑 Cancelling {len(worker_tasks)} PDF workers...")
+        for worker in worker_tasks:
+            worker.cancel()
+            
         result_sender_task.cancel()
         cleanup_task.cancel()
         monitor_task.cancel()
@@ -657,7 +666,7 @@ async def main():
         try:
             await asyncio.wait_for(
                 asyncio.gather(
-                    job_processor_task,
+                    *worker_tasks,
                     result_sender_task,
                     cleanup_task,
                     monitor_task,
